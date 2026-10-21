@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
                     demoElapsedMinutes = intent.getIntExtra("demoElapsedMinutes", 0),
                     labelsDemoAsConnected = intent.getBooleanExtra("demoLabelConnected", false),
                     logsConnections = intent.getBooleanExtra("logConnections", false),
+                    demoHistory = intent.getBooleanExtra("demoHistory", false),
                 )
                 return AppModel(application, options) as T
             }

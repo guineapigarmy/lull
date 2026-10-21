@@ -86,7 +86,7 @@ fun DeviceSheet(model: AppModel, onDismiss: () -> Unit) {
 
             if (model.isSlowToFind) {
                 Section(header = "Can't find your BedJet?", footer = "Lull keeps looking while it's open.") {
-                    Tip(Icons.Filled.Bed, "Lull works with BedJet 3 and BedJet V2.")
+                    Tip(Icons.Filled.Bed, "Lull works with BedJet 3 and BedJet V2. The original BedJet isn't supported.")
                     Tip(Icons.Filled.Close, "Force-quit the BedJet app: open your recent apps, then swipe the BedJet app away.")
                     Tip(Icons.Filled.Smartphone, "Close the BedJet app on any other phone or tablet nearby.")
                     Tip(Icons.Filled.Power, "Unplug the BedJet for 10 seconds, then plug it back in.")

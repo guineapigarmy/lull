@@ -53,6 +53,8 @@ data class LaunchOptions(
     val labelsDemoAsConnected: Boolean = false,
     /** Keeps a record of connection times, so they can be measured on a real phone. */
     val logsConnections: Boolean = false,
+    /** Fills an empty History with a few sample nights, for listing screenshots. */
+    val demoHistory: Boolean = false,
 )
 
 class AppModel(application: Application, val options: LaunchOptions) : AndroidViewModel(application) {
@@ -102,7 +104,12 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     private var demo by mutableStateOf(isEmulator() || prefs.getBoolean("demoMode", false))
     var demoMode: Boolean
         get() = demo
-        set(value) { demo = value; prefs.edit().putBoolean("demoMode", value).apply(); reconnect() }
+        set(value) {
+            demo = value
+            prefs.edit().putBoolean("demoMode", value).apply()
+            loadHistory()
+            reconnect()
+        }
 
     /** Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check. */
     var isSlowToFind by mutableStateOf(false); private set
@@ -202,6 +209,9 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
      */
     fun appMovedToBackground() {
         link?.stop()
+        // A change still settling would otherwise wait until Lull is opened again.
+        if (settling != null) commitObserved()
+        saveHistory()
     }
 
     fun appBecameActive() {
@@ -224,6 +234,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
         timeSearch()
         val link = link ?: return
         if (state != LinkState.READY) return
+        connectedAt = System.currentTimeMillis()
         generation = link.generation
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
@@ -250,6 +261,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     private fun statusChanged(status: DeviceStatus) {
         this.status = status
+        observe(status)
         val run = run ?: return
         val now = System.currentTimeMillis()
         val settled = now - run.startedAt > 15_000
@@ -259,7 +271,13 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
         // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
         // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
         val minutesEarly = ((run.endsAt - now) / 60_000).toInt()
-        if (!isBusy && minutesEarly > 2) {
+        if (isBusy) return
+        if (minutesEarly > 2) {
+            record(HistoryEntry.Event.ScheduleEnded(run.schedule.name, HistoryEntry.Ending.Early(minutesEarly)), noticedLater = isJustConnected)
+        } else {
+            record(HistoryEntry.Event.ScheduleEnded(run.schedule.name, HistoryEntry.Ending.Finished), at = minOf(run.endsAt, now))
+        }
+        if (minutesEarly > 2) {
             errorMessage = "Your BedJet turned off ${Format.duration(minutesEarly)} before tonight's schedule ended " +
                 "(BedJet reason ${status.lastShutdownReason})."
         }
@@ -302,6 +320,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             link.startProgram(slot)
             confirmStarted()
             run = ActiveRun(schedule, System.currentTimeMillis())
+            record(HistoryEntry.Event.ScheduleStarted(schedule.name, schedule.phases))
             if (link is DemoLink && options.demoElapsedMinutes > 0) {
                 link.skipAhead(options.demoElapsedMinutes)
                 run = run?.copy(startedAt = System.currentTimeMillis() - options.demoElapsedMinutes * 60_000L)
@@ -336,9 +355,11 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     suspend fun endNight() {
         val link = link ?: return
+        val name = run?.schedule?.name
         perform {
             link.setMode(Mode.STANDBY)
             run = null
+            record(HistoryEntry.Event.ScheduleEnded(name, HistoryEntry.Ending.ByYou))
         }
     }
 
@@ -346,9 +367,12 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     suspend fun setMode(mode: Mode) {
         val link = link ?: return
+        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
+        val endingSchedule = run?.schedule?.name
         perform {
             link.setMode(mode)
             run = null
+            if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
             keepsLongestRuntime = true
             extendRuntime(entering = mode)
         }
@@ -420,6 +444,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             errorMessage = error.message ?: BedJetError.BadResponse.message
         } finally {
             isBusy = false
+            lastCommandAt = System.currentTimeMillis()
         }
     }
 
@@ -491,8 +516,133 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     private val file = File(application.filesDir, "lull.json")
     private val json = Json { ignoreUnknownKeys = true }
 
+    // History
+
+    /** What the BedJet did, oldest first, so the morning after can be checked against how the night felt. */
+    var history by mutableStateOf<List<HistoryEntry>>(emptyList()); private set
+    val nights: List<Night> get() = Night.group(history)
+
+    /** The settings worth remembering from a status report. The timer is carried along to tell when it ran out. */
+    @Serializable
+    private data class Seen(
+        val mode: Mode,
+        val temperature: Int,
+        val fanPercent: Int,
+        val programStep: Int,
+        val remainingSeconds: Int,
+        val at: Long = System.currentTimeMillis(),
+    ) {
+        constructor(status: DeviceStatus, programStep: Int) :
+            this(status.mode, status.targetTemperature, status.fanPercent, programStep, status.remainingSeconds)
+
+        fun sameSettings(other: Seen): Boolean =
+            mode == other.mode && fanPercent == other.fanPercent && programStep == other.programStep &&
+                (!mode.usesTemperature || temperature == other.temperature)
+    }
+
+    /** What the history last recorded the BedJet doing, kept across launches to notice what changed while Lull was closed. */
+    private var lastSeen: Seen? = null
+    /** The latest report, waiting to settle before it is compared with [lastSeen]. */
+    private var observed: Seen? = null
+    private var settling: Job? = null
+    private var connectedAt = 0L
+    private var lastCommandAt = 0L
+
+    /** The first reports after connecting describe the BedJet as it was left, not something that just happened. */
+    private val isJustConnected: Boolean get() = System.currentTimeMillis() - connectedAt < 10_000
+
+    /** Waits for the BedJet to hold a setting for a few seconds, so dragging a slider is one entry, not twenty. */
+    private fun observe(status: DeviceStatus) {
+        // Whether a schedule is running arrives in the second half of the report; without it a phase
+        // change can't be told from a change someone made.
+        val step = status.extra?.programStep ?: return
+        val seen = Seen(status, step)
+        val isNew = observed?.let { !seen.sameSettings(it) } ?: true
+        observed = seen
+        val last = lastSeen
+        if (last != null && seen.sameSettings(last)) {
+            settling?.cancel()
+            settling = null
+            lastSeen = seen
+            return
+        }
+        if (!isNew && settling != null) return
+        settling?.cancel()
+        settling = viewModelScope.launch {
+            delay(3000)
+            commitObserved()
+        }
+    }
+
+    private fun commitObserved() {
+        settling?.cancel()
+        settling = null
+        val now = observed ?: return
+        // The first report ever only sets where the history starts from.
+        val before = lastSeen
+        lastSeen = now
+        if (before == null) return
+        val wasAway = before.at < connectedAt && isJustConnected
+        when {
+            before.programStep == 0 && now.programStep >= 1 -> {
+                // Started from this phone, it is recorded once the BedJet confirms it.
+                if (run == null && !isBusy) record(HistoryEntry.Event.ScheduleStarted(null, null), noticedLater = wasAway)
+                return
+            }
+            // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.
+            before.programStep >= 1 && now.programStep >= 1 && before.programStep != now.programStep -> return
+            before.programStep >= 1 && now.programStep == 0 && now.mode == Mode.STANDBY -> return
+        }
+        val clock = System.currentTimeMillis()
+        if (now.mode == Mode.STANDBY) {
+            if (before.mode == Mode.STANDBY) return
+            val timerEnds = before.at + before.remainingSeconds * 1000L
+            val ranOut = lastCommandAt < before.at && (before.remainingSeconds < 120 || (wasAway && timerEnds < clock))
+            record(HistoryEntry.Event.Off(ranOut), at = if (ranOut) minOf(timerEnds, clock) else clock, noticedLater = wasAway && !ranOut)
+        } else {
+            record(HistoryEntry.Event.Air(now.mode, now.temperature, now.fanPercent), noticedLater = wasAway)
+        }
+    }
+
+    private fun record(event: HistoryEntry.Event, at: Long = System.currentTimeMillis(), noticedLater: Boolean = false) {
+        var entries = history + HistoryEntry(at, event, status?.ambientTemperature, noticedLater)
+        val previous = entries.dropLast(1).lastOrNull()
+        if (previous != null && previous.date > at) entries = entries.sortedBy { it.date }
+        // Two months is plenty to compare one season's nights with the next.
+        val cutoff = System.currentTimeMillis() - 60 * 86_400_000L
+        history = entries.filter { it.date >= cutoff }
+        saveHistory()
+    }
+
+    @Serializable
+    private data class SavedHistory(val entries: List<HistoryEntry>, val lastSeen: Seen? = null)
+
+    /** Demo mode keeps its own history, so pretend nights never mix with real ones. */
+    private val historyFile: File
+        get() = File(getApplication<Application>().filesDir, if (demoMode) "history-demo.json" else "history.json")
+
+    private fun loadHistory() {
+        settling?.cancel()
+        settling = null
+        observed = null
+        val saved = if (options.ephemeral) null else runCatching { json.decodeFromString<SavedHistory>(historyFile.readText()) }.getOrNull()
+        history = saved?.entries ?: if (options.demoHistory) HistoryEntry.samples() else emptyList()
+        lastSeen = saved?.lastSeen
+    }
+
+    private fun saveHistory() {
+        if (options.ephemeral) return
+        val saved = SavedHistory(history, lastSeen)
+        runCatching {
+            val temporary = File(historyFile.parentFile, historyFile.name + ".tmp")
+            temporary.writeText(json.encodeToString(SavedHistory.serializer(), saved))
+            temporary.renameTo(historyFile)
+        }
+    }
+
     // Last, so every property above is set before anything is loaded or connected.
     init {
+        loadHistory()
         load()
         reconnect()
     }
@@ -503,6 +653,10 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             savedSchedules = saved.schedules
             savedTonightID = saved.tonightID
             savedRun = saved.run?.takeIf { it.endsAt > System.currentTimeMillis() }
+            val ended = saved.run
+            if (ended != null && savedRun == null) {
+                record(HistoryEntry.Event.ScheduleEnded(ended.schedule.name, HistoryEntry.Ending.Finished), at = ended.endsAt)
+            }
             savedSlot = saved.slot
         } else {
             savedSchedules = Schedule.templates

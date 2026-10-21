@@ -9,11 +9,14 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -24,6 +27,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -99,6 +103,74 @@ class LullUiTest {
     }
 
     @Test
+    fun historyKeepsTheNight() {
+        compose.onNodeWithText("History").performClick()
+        compose.waitFor(hasText("No nights yet"), timeoutMillis = 10_000)
+
+        compose.onNodeWithText("Remote").performClick()
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        // History starts from the BedJet's first settled report; a change before that is where it starts.
+        Thread.sleep(5000)
+        compose.onNodeWithText("Heat").performClick()
+        compose.waitFor(hasContentDescription("Turns off in"))
+        // A setting is recorded once the BedJet has held it for a few seconds.
+        Thread.sleep(4000)
+        compose.onNodeWithText("Off").performClick()
+        Thread.sleep(4000)
+
+        // A schedule's phases are its own; only its start and end are recorded.
+        compose.onNodeWithText("Schedule").performClick()
+        compose.waitFor(hasContentDescription("Start Night") and isEnabled(), timeoutMillis = 10_000)
+        compose.onNodeWithContentDescription("Start Night").performClick()
+        compose.waitFor(hasText("End Night"), timeoutMillis = 10_000)
+        Thread.sleep(4000)
+        compose.onNodeWithText("End Night").performClick()
+        compose.waitFor(hasContentDescription("Start Night"), timeoutMillis = 10_000)
+        Thread.sleep(4000)
+
+        compose.onNodeWithText("History").performClick()
+        // The night is one row named after the schedule that ran, and opens up to the whole night.
+        compose.waitFor(hasTestTag("Night"))
+        val night = compose.onNodeWithTag("Night")
+        assertTrue(night.label().endsWith("Cool Drift"))
+        compose.onNodeWithText("Turned off").assertDoesNotExist()
+        compose.capture("history-collapsed")
+        night.performClick()
+        compose.waitFor(hasText("Heat ·", substring = true))
+        compose.onNodeWithText("Turned off").assertExists()
+        compose.onNodeWithText("Started Cool Drift").assertExists()
+        compose.onNodeWithText("Ended Cool Drift").assertExists()
+        // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
+        assertEquals(0, compose.onAllNodes(hasText("Cool ·", substring = true)).fetchSemanticsNodes().size)
+        Thread.sleep(1000)
+        compose.capture("history-expanded")
+
+        night.performClick()
+        compose.waitUntilGone(hasText("Turned off"))
+    }
+
+    @Test
+    fun historyListsNightsAsRows() {
+        scenario.close()
+        scenario = launchLull(ephemeral = true, demoHistory = true)
+        compose.onNodeWithText("History").performClick()
+
+        compose.waitFor(hasTestTag("Night"))
+        val nights = compose.onAllNodesWithTag("Night")
+        assertEquals(3, nights.fetchSemanticsNodes().size)
+        // Newest first; a night without a schedule is summed up by its times instead.
+        assertTrue(nights[0].label().endsWith("Cool Drift"))
+        assertTrue(nights[1].label().contains(" – "))
+        compose.capture("history-rows")
+
+        nights[1].performClick()
+        compose.waitFor(hasText("Turned off"))
+        compose.onNodeWithText("Timer ran out", substring = true).assertExists()
+        Thread.sleep(1000)
+        compose.capture("history-row-expanded")
+    }
+
+    @Test
     fun remoteAndDevice() {
         compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
         Thread.sleep(2000)
@@ -129,9 +201,15 @@ class LullUiTest {
     }
 }
 
-fun launchLull(ephemeral: Boolean = true, demoElapsedMinutes: Int = 0, demoLabelConnected: Boolean = false): ActivityScenario<MainActivity> {
+fun launchLull(
+    ephemeral: Boolean = true,
+    demoElapsedMinutes: Int = 0,
+    demoLabelConnected: Boolean = false,
+    demoHistory: Boolean = false,
+): ActivityScenario<MainActivity> {
     val intent = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
         .putExtra("ephemeral", ephemeral)
+        .putExtra("demoHistory", demoHistory)
         .putExtra("demoElapsedMinutes", demoElapsedMinutes)
         .putExtra("demoLabelConnected", demoLabelConnected)
     return ActivityScenario.launch(intent)
@@ -147,6 +225,9 @@ fun ComposeTestRule.waitUntilGone(matcher: SemanticsMatcher, timeoutMillis: Long
 
 fun ComposeTestRule.slider(title: String): SemanticsNodeInteraction =
     onNode(hasContentDescription(title) and SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+
+fun SemanticsNodeInteraction.label(): String =
+    fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString() ?: ""
 
 fun SemanticsNodeInteraction.value(): String? =
     fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)

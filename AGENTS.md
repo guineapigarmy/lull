@@ -38,6 +38,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Hand-over UUID | `BLELink.handoffUUID` | `android/bedjetkit/.../Handoff.kt` |
 | App state and actions | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` |
 | Schedules, phases, templates, formatting | `Lull/Schedule.swift` | `android/app/.../Schedule.kt` |
+| Night history, grouping and sample nights | `Lull/History.swift` | `android/app/.../History.kt` |
 | Colours and shared controls | `Lull/Theme.swift` | `android/app/.../ui/Theme.kt` |
 | Tabs, alerts, screen scaffold | `Lull/Views/RootView.swift` | `android/app/.../ui/RootScreen.kt` |
 | Remote tab | `Lull/Views/RemoteView.swift` | `android/app/.../ui/RemoteScreen.kt` |
@@ -45,6 +46,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Schedule and phase editors | `Lull/Views/ScheduleEditor.swift` | `android/app/.../ui/ScheduleEditor.kt` (`TemperatureSlider` is in `RemoteScreen.kt`, `ModePicker` in `Theme.kt`) |
 | Night curve | `Lull/Views/NightCurve.swift` | `android/app/.../ui/NightCurve.kt` |
 | BedJet sheet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
+| History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
@@ -53,8 +55,9 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Store listing | `fastlane/metadata/en-US/` | `fastlane/metadata/android/en-US/` |
 | Release | `fastlane ios release`, `.github/workflows/app-store.yml` | `fastlane android release`, `.github/workflows/play-store.yml` |
 
-Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected` and `-logConnections`
-on iOS are the `ephemeral`, `demoElapsedMinutes`, `demoLabelConnected` and `logConnections` intent extras on Android.
+Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory` and
+`-logConnections` on iOS are the `ephemeral`, `demoElapsedMinutes`, `demoLabelConnected`, `demoHistory` and
+`logConnections` intent extras on Android.
 
 ## Checking a change
 

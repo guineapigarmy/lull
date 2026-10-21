@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.AlertDialog
@@ -81,6 +82,10 @@ fun RootScreen(model: AppModel) {
                         selected = selectedTab == 1, onClick = { selectedTab = 1 },
                         icon = { Icon(Icons.Filled.NightsStay, null) }, label = { Text("Schedule") }, colors = colors,
                     )
+                    NavigationBarItem(
+                        selected = selectedTab == 2, onClick = { selectedTab = 2 },
+                        icon = { Icon(Icons.Filled.History, null) }, label = { Text("History") }, colors = colors,
+                    )
                 }
             }
         },
@@ -88,7 +93,8 @@ fun RootScreen(model: AppModel) {
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (selectedTab) {
                 0 -> RemoteScreen(model)
-                else -> ScheduleScreen(model)
+                1 -> ScheduleScreen(model)
+                else -> HistoryScreen(model)
             }
         }
     }

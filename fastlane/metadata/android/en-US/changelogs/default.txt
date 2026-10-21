@@ -1,1 +1,6 @@
-Bug fixes and improvements.
+Lull for Android is here.
+
+• Plan the whole night as phases and save it to your BedJet 3 or BedJet V2, which runs it while your phone sleeps.
+• Use the Remote for cool, heat, turbo and more, with fan, temperature and a shut-off timer.
+• History shows what your BedJet did each night and every change you made.
+• Phones with Lull, Android or iPhone, hand the BedJet to each other automatically.

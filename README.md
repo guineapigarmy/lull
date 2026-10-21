@@ -1,16 +1,17 @@
 # Lull
 
-Schedule your BedJet 3 through the night. No account, no cloud.
+Schedule your BedJet 3 or BedJet V2 through the night. No account, no cloud.
 
 ![Lull screens](screens.png)
 
-Lull is an iOS app that plans a whole night of heating and cooling for a BedJet 3, saves it to the
-BedJet itself, and lets the BedJet run it. Your phone can sleep, leave the room, or run out of battery;
+Lull is an iOS app that plans a whole night of heating and cooling for a BedJet 3 or BedJet V2, saves it
+to the BedJet itself, and lets the BedJet run it. Your phone can sleep, leave the room, or run out of battery;
 the night keeps going.
 
 - **Schedules**: build a night out of phases (Cool, Heat, Gentle heat, Turbo, Dry, Pause), each with
   its own temperature, fan speed and duration, and see the whole curve at a glance.
-- **Runs on the device**: tonight's schedule is written into one of the BedJet's three program slots.
+- **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
+  BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
@@ -25,9 +26,10 @@ the night keeps going.
 | Path | What it is |
 | --- | --- |
 | `Lull/` | The SwiftUI app (model, schedules, views, theme) |
-| `BedJetKit/` | Swift package: the BedJet 3 Bluetooth protocol, a CoreBluetooth transport, and a simulated BedJet |
+| `BedJetKit/` | Swift package: the BedJet 3 and V2 Bluetooth protocols, a CoreBluetooth transport, and a simulated BedJet 3 |
 | `BedJetKit/Sources/bedjetctl` | A read-only command-line tool that prints a real BedJet's status and saved programs |
 | `LullUITests/` | UI tests that walk the main flows against the simulated BedJet |
+| `docs/BEDJET_V2_PROTOCOL.md` | The BedJet V2 protocol, how it was worked out, and what is still unconfirmed |
 | `screenshots/`, `app-store-screenshots/` | Marketing and App Store screenshots |
 
 ## Getting started

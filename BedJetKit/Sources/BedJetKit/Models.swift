@@ -1,6 +1,7 @@
 import Foundation
 
-/// Operating modes as the BedJet 3 reports them and stores them in program steps.
+/// Operating modes as the BedJet 3 reports them and stores them in program steps. `CodecV2` maps the
+/// V2's own codes onto these.
 public enum Mode: UInt8, Codable, CaseIterable, Sendable {
     case standby = 0
     case heat = 1
@@ -37,6 +38,25 @@ public enum Mode: UInt8, Codable, CaseIterable, Sendable {
 
     public var usesTemperature: Bool { temperatureRange.lowerBound != temperatureRange.upperBound }
     public var usesFan: Bool { self != .standby && self != .wait }
+}
+
+/// Which BedJet a link is talking to. Both run the same kind of program on the unit, but they speak
+/// different protocols and the V2 has fewer modes.
+public enum Generation: String, Codable, Sendable {
+    case v2
+    case v3
+
+    public func supports(_ mode: Mode) -> Bool {
+        switch self {
+        case .v3: return true
+        case .v2: return [.standby, .heat, .turbo, .cool, .wait].contains(mode)
+        }
+    }
+
+    /// The V2 only takes a target temperature for Heat.
+    public func adjustsTemperature(_ mode: Mode) -> Bool {
+        self == .v2 ? mode == .heat : mode.usesTemperature
+    }
 }
 
 /// One step of an on-device program ("biorhythm"). Five bytes on the wire.

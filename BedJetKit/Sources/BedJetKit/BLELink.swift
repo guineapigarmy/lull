@@ -2,7 +2,10 @@
 import CryptoKit
 import Foundation
 
-/// CoreBluetooth transport for a BedJet 3. Connects to the remembered unit, or the first one found.
+/// CoreBluetooth transport for a BedJet 3 or V2. Connects to the remembered unit, or the first one found.
+///
+/// The BedJet 3 has its own GATT service. The V2 sends its serial protocol (`CodecV2`) through a
+/// Microchip "transparent UART" service, which other gadgets use too, so a V2 is recognised by its name.
 ///
 /// The BedJet accepts a single connection and stops advertising while it has one, so a second phone
 /// cannot even see it. Two phones share it by handing over: the phone that wants the BedJet briefly
@@ -16,6 +19,8 @@ public final class BLELink: NSObject, BedJetLink {
             onStateChange?(state)
         }
     }
+    public private(set) var generation: Generation = .v3
+    public private(set) var lastStatus: DeviceStatus?
     public var onStateChange: ((LinkState) -> Void)?
     public var onStatus: ((DeviceStatus) -> Void)?
     /// Return false to postpone a hand-over, for example while a schedule is being saved.
@@ -28,6 +33,9 @@ public final class BLELink: NSObject, BedJetLink {
     private static let nameUUID = uuid("2001")
     private static let commandUUID = uuid("2004")
     private static let replyUUID = uuid("2006")
+    private static let uartService = CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455")
+    private static let uartNotifyUUID = CBUUID(string: "49535343-1E4D-4BD9-BA61-23C647249616")
+    private static let uartWriteUUID = CBUUID(string: "49535343-8841-43F4-A8D4-ECBE34729BB3")
     private static let rememberedKey = "BedJetKit.peripheral"
     private static let nameKey = "BedJetKit.deviceName"
 
@@ -64,6 +72,9 @@ public final class BLELink: NSObject, BedJetLink {
     private var queue: Task<Void, Never>?
     private var pendingWrite: CheckedContinuation<Void, Error>?
     private var pendingRead: CheckedContinuation<Data, Error>?
+    /// A V2 answers through the same notifications that carry its status.
+    private var pendingReply: (query: UInt8, continuation: CheckedContinuation<Data, Error>)?
+    private var uartBuffer = Data()
     private var operation = 0
 
     public func start() {
@@ -127,7 +138,13 @@ public final class BLELink: NSObject, BedJetLink {
     }
 
     public func query(_ request: UInt8) async throws -> Data {
-        try await serially {
+        if generation == .v2 {
+            return try await serially {
+                // A request the unit missed is simply asked again.
+                do { return try await self.exchange(request) } catch BedJetError.timeout { return try await self.exchange(request) }
+            }
+        }
+        return try await serially {
             // The reply characteristic keeps its previous contents until the unit has answered,
             // so retry until the echoed request and tag match.
             for attempt in 0..<4 {
@@ -157,7 +174,8 @@ public final class BLELink: NSObject, BedJetLink {
         } else {
             if state != .yielded { state = .searching }
             foundByScan = true
-            central.scanForPeripherals(withServices: [Self.service])
+            // Not filtered by service, because a V2 is known by its name rather than by what it advertises.
+            central.scanForPeripherals(withServices: nil)
         }
     }
 
@@ -198,6 +216,10 @@ public final class BLELink: NSObject, BedJetLink {
         statusCharacteristic = nil
         lastHead = nil
         lastExtra = nil
+        lastStatus = nil
+        uartBuffer.removeAll()
+        pendingReply?.continuation.resume(throwing: BedJetError.notConnected)
+        pendingReply = nil
         pendingWrite?.resume(throwing: BedJetError.notConnected)
         pendingWrite = nil
         pendingRead?.resume(throwing: BedJetError.notConnected)
@@ -293,6 +315,16 @@ public final class BLELink: NSObject, BedJetLink {
         }
     }
 
+    private func exchange(_ request: UInt8) async throws -> Data {
+        guard state == .ready, let peripheral, let command else { throw BedJetError.notConnected }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            // Listen before writing, since the reply can arrive before the write is acknowledged.
+            pendingReply = (request, continuation)
+            peripheral.writeValue(CodecV2.request(request), for: command, type: .withResponse)
+            expire { if let pending = $0.pendingReply { $0.pendingReply = nil; pending.continuation.resume(throwing: BedJetError.timeout) } }
+        }
+    }
+
     private func expire(_ fail: @escaping @MainActor (BLELink) -> Void) {
         operation += 1
         let current = operation
@@ -312,6 +344,7 @@ public final class BLELink: NSObject, BedJetLink {
             return
         }
         guard var status = Codec.parseStatus(chunk) else { return }
+        defer { lastStatus = status; onStatus?(status) }
         if let extra = status.extra {
             lastExtra = extra
         } else {
@@ -322,7 +355,33 @@ public final class BLELink: NSObject, BedJetLink {
                 peripheral.readValue(for: statusCharacteristic)
             }
         }
-        onStatus?(status)
+    }
+
+    /// A V2 streams packets that notifications may split, and answers requests among its status updates.
+    private func receiveUART(_ chunk: Data) {
+        uartBuffer.append(chunk)
+        for packet in CodecV2.takePackets(from: &uartBuffer) {
+            if let status = CodecV2.parseStatus(packet) {
+                lastStatus = status
+                onStatus?(status)
+            }
+            if let name = CodecV2.reply(to: CodecV2.Query.deviceName, in: packet).map(CodecV2.parseName), !name.isEmpty {
+                // The unit's own name identifies it to the other phone during a hand-over.
+                UserDefaults.standard.set(name, forKey: Self.nameKey)
+                watchForRequests()
+            }
+            if let pending = pendingReply, let payload = CodecV2.reply(to: pending.query, in: packet) {
+                pendingReply = nil
+                pending.continuation.resume(returning: payload)
+            }
+        }
+    }
+
+    private static func isBedJet(_ peripheral: CBPeripheral, advertisement: [String: Any]) -> Bool {
+        let services = advertisement[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+        if services.contains(service) { return true }
+        let name = advertisement[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? ""
+        return name.uppercased().hasPrefix("BEDJET")
     }
 }
 
@@ -355,7 +414,7 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
                 if let request = handoffUUID, services.contains(request) { handOver() }
                 return
             }
-            guard self.peripheral == nil else { return }
+            guard self.peripheral == nil, Self.isBedJet(peripheral, advertisement: advertisementData) else { return }
             connect(peripheral)
         }
     }
@@ -366,7 +425,7 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
             skipsRememberedUnit = false
             UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Self.rememberedKey)
             linkUpAfter = askedAt.map { Date().timeIntervalSince($0) }
-            peripheral.discoverServices([Self.service])
+            peripheral.discoverServices([Self.service, Self.uartService])
         }
     }
 
@@ -387,12 +446,17 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         MainActor.assumeIsolated {
-            guard let service = peripheral.services?.first(where: { $0.uuid == Self.service }) else {
-                central?.cancelPeripheralConnection(peripheral)
-                return
-            }
+            let services = peripheral.services ?? []
             servicesAfter = askedAt.map { Date().timeIntervalSince($0) } ?? 0
-            peripheral.discoverCharacteristics([Self.statusUUID, Self.nameUUID, Self.commandUUID, Self.replyUUID], for: service)
+            if let service = services.first(where: { $0.uuid == Self.service }) {
+                generation = .v3
+                peripheral.discoverCharacteristics([Self.statusUUID, Self.nameUUID, Self.commandUUID, Self.replyUUID], for: service)
+            } else if let service = services.first(where: { $0.uuid == Self.uartService }) {
+                generation = .v2
+                peripheral.discoverCharacteristics([Self.uartNotifyUUID, Self.uartWriteUUID], for: service)
+            } else {
+                central?.cancelPeripheralConnection(peripheral)
+            }
         }
     }
 
@@ -404,12 +468,15 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
                     statusCharacteristic = characteristic
                     peripheral.setNotifyValue(true, for: characteristic)
                 case Self.nameUUID: peripheral.readValue(for: characteristic)
-                case Self.commandUUID: command = characteristic
+                case Self.commandUUID, Self.uartWriteUUID: command = characteristic
                 case Self.replyUUID: reply = characteristic
+                case Self.uartNotifyUUID:
+                    statusCharacteristic = characteristic
+                    peripheral.setNotifyValue(true, for: characteristic)
                 default: break
                 }
             }
-            guard command != nil, reply != nil else {
+            guard command != nil, reply != nil || generation == .v2 else {
                 central?.cancelPeripheralConnection(peripheral)
                 return
             }
@@ -424,11 +491,22 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
             linkUpAfter = nil
             state = .ready
             watchForRequests()
+            if generation == .v2 {
+                // The official app asks for the unit's details first thing, and the name is needed for hand-overs.
+                Task { @MainActor [weak self] in
+                    _ = try? await self?.query(CodecV2.Query.info)
+                    _ = try? await self?.deviceName()
+                }
+            }
         }
     }
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         MainActor.assumeIsolated {
+            if let error, let pending = pendingReply {
+                pendingReply = nil
+                pending.continuation.resume(throwing: error)
+            }
             guard let pending = pendingWrite else { return }
             pendingWrite = nil
             if let error { pending.resume(throwing: error) } else { pending.resume() }
@@ -439,6 +517,8 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
         MainActor.assumeIsolated {
             if characteristic.uuid == Self.statusUUID {
                 if let value = characteristic.value { receiveStatus(value) }
+            } else if characteristic.uuid == Self.uartNotifyUUID {
+                if let value = characteristic.value { receiveUART(value) }
             } else if characteristic.uuid == Self.nameUUID {
                 // The unit's own name identifies it to the other phone during a hand-over.
                 guard let value = characteristic.value, !value.isEmpty else { return }

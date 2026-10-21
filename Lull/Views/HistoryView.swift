@@ -128,7 +128,7 @@ private struct EntryRow: View {
     private var title: String {
         switch entry.event {
         case let .air(mode, temperature, fan):
-            return mode.usesTemperature ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
+            return model.adjustsTemperature(mode) ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
         case .off: return "Turned off"
         case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"
         case let .scheduleEnded(name, ending):

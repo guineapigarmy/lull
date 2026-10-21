@@ -128,6 +128,7 @@ fun RemoteScreen(model: AppModel) {
                                 sending("temperature") { model.setTemperature(temperature) }
                             },
                             limits = if (shown.minTemperature < shown.maxTemperature) shown.minTemperature..shown.maxTemperature else null,
+                            enabled = model.canControl,
                         )
                     }
                     LabeledSlider(
@@ -136,7 +137,7 @@ fun RemoteScreen(model: AppModel) {
                             fan = it
                             sending("fan") { model.setFan(fan.toInt()) }
                         },
-                        range = 5f..100f, step = 5f, tint = shown.mode.tint,
+                        range = 5f..100f, step = 5f, tint = shown.mode.tint, enabled = model.canControl,
                     )
                     if (model.run == null) {
                         val limit = runtimeLimit(shown)
@@ -146,7 +147,7 @@ fun RemoteScreen(model: AppModel) {
                                 runtime = it
                                 sending("runtime") { model.setRuntime(runtime.toInt()) }
                             },
-                            range = limit.range, step = limit.step,
+                            range = limit.range, step = limit.step, enabled = model.canControl,
                         )
                     } else {
                         // A schedule sets its own timing, so this is read-only until it ends.
@@ -184,7 +185,14 @@ private fun runtimeLimit(status: DeviceStatus): RuntimeLimit {
  * The Remote passes the limits the BedJet reports for the mode it is in, which can be narrower than the mode's range.
  */
 @Composable
-fun TemperatureSlider(model: AppModel, mode: Mode, temperature: Int, onChange: (Int) -> Unit, limits: IntRange? = null) {
+fun TemperatureSlider(
+    model: AppModel,
+    mode: Mode,
+    temperature: Int,
+    onChange: (Int) -> Unit,
+    limits: IntRange? = null,
+    enabled: Boolean = true,
+) {
     val bounds = limits ?: mode.temperatureRange
     val low = Format.degrees(bounds.first, model.useFahrenheit)
     val high = maxOf(Format.degrees(bounds.last, model.useFahrenheit), low + 1)
@@ -194,7 +202,7 @@ fun TemperatureSlider(model: AppModel, mode: Mode, temperature: Int, onChange: (
             val halves = Format.halfCelsius(value.toInt(), model.useFahrenheit)
             onChange(halves.coerceIn(bounds))
         },
-        range = low.toFloat()..high.toFloat(), tint = mode.tint,
+        range = low.toFloat()..high.toFloat(), tint = mode.tint, enabled = enabled,
     )
 }
 

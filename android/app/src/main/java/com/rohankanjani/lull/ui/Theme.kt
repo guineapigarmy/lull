@@ -218,10 +218,11 @@ fun LabeledSlider(
     range: ClosedFloatingPointRange<Float>,
     step: Float = 1f,
     tint: Color = Color.White,
+    enabled: Boolean = true,
 ) {
     val haptics = LocalHapticFeedback.current
     val steps = (((range.endInclusive - range.start) / step).roundToInt() - 1).coerceAtLeast(0)
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary)
             Spacer(Modifier.weight(1f))
@@ -238,6 +239,7 @@ fun LabeledSlider(
             },
             valueRange = range,
             steps = steps,
+            enabled = enabled,
             // Drawn like the iOS app's slider: a thin tinted track and a white capsule thumb.
             thumb = {
                 Box(

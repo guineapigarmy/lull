@@ -1,5 +1,8 @@
 package com.rohankanjani.lull
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.rohankanjani.lull.bedjetkit.Limits
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.ProgramStep
@@ -158,8 +161,8 @@ val Mode.maxMinutes: Int
     }
 
 object Format {
-    /** Follows the phone's 12/24-hour setting; set by the activity at launch. */
-    var use24Hour = false
+    /** Follows the phone's 12/24-hour setting; the activity updates it whenever Lull comes on screen. */
+    var use24Hour by mutableStateOf(false)
 
     fun clock(minuteOfDay: Int): String {
         val minute = ((minuteOfDay % 1440) + 1440) % 1440

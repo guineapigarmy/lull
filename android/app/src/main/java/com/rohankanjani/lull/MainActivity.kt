@@ -45,11 +45,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
-        Format.use24Hour = DateFormat.is24HourFormat(this)
 
         // The BedJet is released whenever Lull leaves the screen, and asked for again when it comes back.
         lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) = model.appBecameActive()
+            override fun onStart(owner: LifecycleOwner) {
+                Format.use24Hour = DateFormat.is24HourFormat(this@MainActivity)
+                model.appBecameActive()
+            }
             override fun onStop(owner: LifecycleOwner) = model.appMovedToBackground()
         })
 

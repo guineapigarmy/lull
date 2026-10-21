@@ -192,7 +192,9 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
                 firmware = link.firmwareVersion()
                 refreshSlots()
                 lastRefresh = System.currentTimeMillis()
-            } catch (error: BedJetError) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
                 // Status keeps streaming without these; they are retried on the next connection.
             }
         }
@@ -249,7 +251,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
                 link.skipAhead(options.demoElapsedMinutes)
                 run = run?.copy(startedAt = System.currentTimeMillis() - options.demoElapsedMinutes * 60_000L)
             }
-            try { refreshSlots() } catch (_: BedJetError) {}
+            attempt { refreshSlots() }
         }
     }
 
@@ -266,7 +268,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
                 else -> null
             }
             if (refusal != null) {
-                try { link.send(Codec.acknowledgeNotification) } catch (_: BedJetError) {}
+                attempt { link.send(Codec.acknowledgeNotification) }
                 throw refusal
             }
         }
@@ -363,6 +365,16 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             errorMessage = error.message ?: BedJetError.BadResponse.message
         } finally {
             isBusy = false
+        }
+    }
+
+    /** Like Swift's `try?`: anything that goes wrong is ignored, but cancellation still cancels. */
+    private suspend fun attempt(work: suspend () -> Unit) {
+        try {
+            work()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
         }
     }
 

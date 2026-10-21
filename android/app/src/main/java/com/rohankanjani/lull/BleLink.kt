@@ -85,6 +85,8 @@ class BleLink(context: Context) : BedJetLink {
         /** How long a request is advertised. Shorter than the courtesy, so one request is answered once. */
         const val REQUEST_DURATION_MS = 8_000L
         const val OPERATION_TIMEOUT_MS = 5_000L
+        /** Status an operation finishes with when the connection went away before it completed. */
+        const val LINK_GONE = -1
     }
 
     private val prefs = context.getSharedPreferences("BedJetKit", Context.MODE_PRIVATE)
@@ -100,7 +102,7 @@ class BleLink(context: Context) : BedJetLink {
     private var requestGeneration = 0
     private var advertising: AdvertiseCallback? = null
     private var scanning: ScanCallback? = null
-    private var receiverRegistered = false
+    private var radioReceiver: BroadcastReceiver? = null
     /** A direct connection to the remembered unit gives up after about 30 seconds; after that, wait for it. */
     private var directFailed = false
     private var askedAt: Long? = null
@@ -131,12 +133,13 @@ class BleLink(context: Context) : BedJetLink {
         stopRequesting()
         stopScan()
         yieldedUntil = 0
-        val gatt = gatt ?: return
-        if (state == LinkState.READY) {
+        stopWatchingRadio()
+        val gatt = gatt
+        if (gatt != null && state == LinkState.READY) {
             gatt.disconnect()
         } else {
             // Nothing is connected, so no disconnect will arrive to tidy up.
-            gatt.close()
+            gatt?.close()
             this.gatt = null
             if (state == LinkState.CONNECTING || state == LinkState.YIELDED) state = LinkState.SEARCHING
         }
@@ -152,6 +155,12 @@ class BleLink(context: Context) : BedJetLink {
             gatt = null
             directFailed = false
             state = LinkState.SEARCHING
+        } else if (directFailed && state != LinkState.READY) {
+            // Likewise a phone waiting in the background because another phone had the BedJet:
+            // that phone is about to be asked to let go, so be ready to take it straight away.
+            gatt?.close()
+            gatt = null
+            directFailed = false
         }
         if (state != LinkState.READY && askedAt == null) {
             askedAt = SystemClock.elapsedRealtime()
@@ -218,8 +227,7 @@ class BleLink(context: Context) : BedJetLink {
     }
 
     private fun watchRadio() {
-        if (receiverRegistered) return
-        receiverRegistered = true
+        if (radioReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
@@ -235,9 +243,16 @@ class BleLink(context: Context) : BedJetLink {
                 }
             }
         }
+        radioReceiver = receiver
         ContextCompat.registerReceiver(
             context, receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+    }
+
+    private fun stopWatchingRadio() {
+        val receiver = radioReceiver ?: return
+        radioReceiver = null
+        context.unregisterReceiver(receiver)
     }
 
     // Connection
@@ -276,9 +291,9 @@ class BleLink(context: Context) : BedJetLink {
         statusCharacteristic = null
         lastHead = null
         lastExtra = null
-        current?.finish?.invoke(null, BluetoothGatt.GATT_FAILURE)
+        current?.finish?.invoke(null, LINK_GONE)
         current = null
-        while (operations.isNotEmpty()) operations.removeFirst().finish(null, BluetoothGatt.GATT_FAILURE)
+        while (operations.isNotEmpty()) operations.removeFirst().finish(null, LINK_GONE)
         stopScan()
         if (state != LinkState.YIELDED && state != LinkState.BLUETOOTH_OFF) state = LinkState.SEARCHING
         // A short pause stops a unit that keeps refusing from turning this into a busy loop.
@@ -333,6 +348,15 @@ class BleLink(context: Context) : BedJetLink {
                     }
                 }
             }
+
+            override fun onScanFailed(errorCode: Int) {
+                // Android limits how often an app may start scanning; try again shortly rather than sit searching.
+                main.postDelayed({
+                    if (scanning !== this) return@postDelayed
+                    scanning = null
+                    if (forRequests) watchForRequests() else connectIfPossible()
+                }, 5_000)
+            }
         }
         scanning = callback
         val mode = if (forRequests) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_LATENCY
@@ -373,7 +397,7 @@ class BleLink(context: Context) : BedJetLink {
         if (current != null) return
         val gatt = gatt
         val next = operations.removeFirstOrNull() ?: return
-        if (gatt == null) return next.finish(null, BluetoothGatt.GATT_FAILURE)
+        if (gatt == null) return next.finish(null, LINK_GONE)
         current = next
         if (!next.begin(gatt)) {
             current = null
@@ -394,24 +418,31 @@ class BleLink(context: Context) : BedJetLink {
         val characteristic = command
         if (state != LinkState.READY || characteristic == null) throw BedJetError.NotConnected
         val done = CompletableDeferred<Int>()
-        enqueue(Operation(begin = { it.write(characteristic, data) }, finish = { _, status -> done.complete(status) }))
-        val status = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { done.await() } ?: run { abandon(); throw BedJetError.Timeout }
+        val operation = Operation(begin = { it.write(characteristic, data) }, finish = { _, status -> done.complete(status) })
+        enqueue(operation)
+        val status = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { done.await() } ?: run { abandon(operation); throw BedJetError.Timeout }
         if (status != BluetoothGatt.GATT_SUCCESS) throw BedJetError.NotConnected
     }
 
     private suspend fun read(): ByteArray {
         val characteristic = reply
         if (state != LinkState.READY || characteristic == null) throw BedJetError.NotConnected
-        val done = CompletableDeferred<ByteArray?>()
-        enqueue(Operation(begin = { it.readCharacteristic(characteristic) }, finish = { value, _ -> done.complete(value) }))
-        val value = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { done.await() } ?: run { abandon(); throw BedJetError.Timeout }
+        val done = CompletableDeferred<Pair<ByteArray?, Int>>()
+        val operation = Operation(begin = { it.readCharacteristic(characteristic) }, finish = { value, status -> done.complete(value to status) })
+        enqueue(operation)
+        val (value, status) = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { done.await() } ?: run { abandon(operation); throw BedJetError.Timeout }
+        if (status == LINK_GONE) throw BedJetError.NotConnected
         return value ?: throw BedJetError.BadResponse
     }
 
-    /** An operation the unit never answered stops blocking the ones behind it. */
-    private fun abandon() {
-        current = null
-        runNext()
+    /** An operation the unit never answered stops blocking the ones behind it, and is never sent late. */
+    private fun abandon(operation: Operation) {
+        if (current === operation) {
+            current = null
+            runNext()
+        } else {
+            operations.remove(operation)
+        }
     }
 
     private fun BluetoothGatt.write(characteristic: BluetoothGattCharacteristic, data: ByteArray): Boolean =

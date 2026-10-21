@@ -33,6 +33,8 @@ struct RemoteView: View {
                     chosenMode = nil
                 }
             }
+            // Only the controls: the BedJet button stays usable, so Demo mode is reachable with Bluetooth off.
+            .disabled(!model.canControl)
 
             if let status, status.isRunning {
                 Card(padding: 18) {
@@ -62,6 +64,7 @@ struct RemoteView: View {
                         }
                     }
                 }
+                .disabled(!model.canControl)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             if model.run != nil {
@@ -71,7 +74,6 @@ struct RemoteView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .disabled(!model.canControl)
         .animation(.smooth(duration: 0.3), value: status?.isRunning)
         .onChange(of: status, initial: true) { _, status in
             // Follow the unit, which can also be changed from its own remote, but never

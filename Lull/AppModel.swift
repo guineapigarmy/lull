@@ -289,6 +289,8 @@ final class AppModel {
         do {
             try await takeControl()
             try await work()
+        } catch is CancellationError {
+            // A newer slider move replaced this one; nothing went wrong.
         } catch {
             errorMessage = error.localizedDescription
         }

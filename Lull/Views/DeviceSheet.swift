@@ -16,6 +16,19 @@ struct DeviceSheet: View {
                     Text(help)
                 }
 
+                if model.isSlowToFind {
+                    Section {
+                        Label("Lull works with BedJet 3. The older BedJet V2 isn't supported.", systemImage: "bed.double")
+                        Label("Force-quit the BedJet app: swipe up from the bottom of the screen, then swipe the app away.", systemImage: "xmark.app")
+                        Label("Close the BedJet app on any other phone or tablet nearby.", systemImage: "iphone")
+                        Label("Unplug the BedJet for 10 seconds, then plug it back in.", systemImage: "powerplug")
+                    } header: {
+                        Text("Can't find your BedJet?")
+                    } footer: {
+                        Text("Lull keeps looking while it's open.")
+                    }
+                }
+
                 if model.isConnected, let extra = model.status?.extra {
                     Section("BedJet") {
                         Toggle("Light ring", isOn: .init(get: { extra.ledEnabled }, set: { on in Task { await model.setLED(on) } }))
@@ -69,7 +82,7 @@ struct DeviceSheet: View {
     private var help: String {
         switch model.linkState {
         case .ready: return model.demoMode ? "Demo mode uses a pretend BedJet so you can explore the app." : "Everything stays between this phone and your BedJet. No account, no cloud."
-        case .connecting, .searching: return "Stand near your BedJet and close the official BedJet app. The BedJet talks to one phone at a time; phones with Lull hand it over to each other automatically."
+        case .connecting, .searching: return "Stand near your BedJet and force-quit the official BedJet app. The BedJet talks to one phone at a time; phones with Lull hand it over to each other automatically."
         case .yielded: return "The BedJet talks to one phone at a time, and another phone with Lull asked for it. Use any control here to take it back."
         case .bluetoothOff: return "Turn on Bluetooth in Control Center to connect."
         case .unauthorized: return "Allow Bluetooth for Lull in Settings to connect."

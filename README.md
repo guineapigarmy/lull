@@ -1,19 +1,20 @@
 # Lull
 
-Schedule your BedJet 3 through the night. No account, no cloud.
+Schedule your BedJet 3 or BedJet V2 through the night. No account, no cloud.
 
 ![Lull screens](screens.png)
 
-Lull is an iPhone and Android app that plans a whole night of heating and cooling for a BedJet 3,
-saves it to the BedJet itself, and lets the BedJet run it. Your phone can sleep, leave the room, or run
-out of battery; the night keeps going.
+Lull is an iPhone and Android app that plans a whole night of heating and cooling for a BedJet 3 or
+BedJet V2, saves it to the BedJet itself, and lets the BedJet run it. Your phone can sleep, leave the
+room, or run out of battery; the night keeps going.
 
 [App Store](https://apps.apple.com/us/app/lull-for-bedjet/id6822096696) ·
 [Google Play](https://play.google.com/store/apps/details?id=com.rohankanjani.lull)
 
 - **Schedules**: build a night out of phases (Cool, Heat, Gentle heat, Turbo, Dry, Pause), each with
   its own temperature, fan speed and duration, and see the whole curve at a glance.
-- **Runs on the device**: tonight's schedule is written into one of the BedJet's three program slots.
+- **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
+  BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically, iPhone or Android.
@@ -33,12 +34,13 @@ agents read before working here.
 | Path | What it is |
 | --- | --- |
 | `Lull/` | The iPhone app in SwiftUI (model, schedules, views, theme) |
-| `BedJetKit/` | Swift package: the BedJet 3 Bluetooth protocol, a CoreBluetooth transport, and a simulated BedJet |
+| `BedJetKit/` | Swift package: the BedJet 3 and V2 Bluetooth protocols, a CoreBluetooth transport, and a simulated BedJet 3 |
 | `BedJetKit/Sources/bedjetctl` | A read-only command-line tool that prints a real BedJet's status and saved programs |
 | `LullUITests/` | iPhone UI tests that walk the main flows against the simulated BedJet |
 | `android/app/` | The Android app in Jetpack Compose, with its Bluetooth transport, unit tests and UI tests |
-| `android/bedjetkit/` | Kotlin port of BedJetKit: the same protocol, simulated BedJet and tests |
+| `android/bedjetkit/` | Kotlin port of BedJetKit: the same protocols, simulated BedJet and tests |
 | `fastlane/` | Release lanes for both stores, and both store listings (`metadata/` and `metadata/android/`) |
+| `docs/BEDJET_V2_PROTOCOL.md` | The BedJet V2 protocol, how it was worked out, and what is still unconfirmed |
 | `screenshots/`, `app-store-screenshots/` | Marketing and App Store screenshots |
 
 ## Getting started

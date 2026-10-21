@@ -30,6 +30,10 @@ final class AppModel {
     private(set) var status: DeviceStatus?
     private(set) var deviceName: String?
     private(set) var firmware: String?
+    /// The kind of BedJet last connected, remembered so schedules can be edited for it while it is away.
+    private(set) var generation: Generation {
+        didSet { UserDefaults.standard.set(generation.rawValue, forKey: "generation") }
+    }
     /// What is saved in the BedJet's three program slots.
     private(set) var deviceSlots: [StoredProgram?] = []
 
@@ -42,6 +46,8 @@ final class AppModel {
     var useFahrenheit: Bool { didSet { UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit") } }
     var demoMode: Bool { didSet { UserDefaults.standard.set(demoMode, forKey: "demoMode"); reconnect() } }
 
+    /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
+    private(set) var isSlowToFind = false
     private(set) var isBusy = false
     var errorMessage: String?
     /// Set when every slot on the BedJet is taken and the user has to pick one to reuse.
@@ -51,6 +57,7 @@ final class AppModel {
     private var lastRefresh = Date.distantPast
     private var keepsLongestRuntime = true
     private var isLoaded = false
+    private var searchTimer: Task<Void, Never>?
 
     var tonight: Schedule? { schedules.first { $0.id == tonightID } ?? schedules.first }
     var isConnected: Bool { linkState == .ready }
@@ -66,6 +73,7 @@ final class AppModel {
     init() {
         let defaults = UserDefaults.standard
         useFahrenheit = defaults.object(forKey: "useFahrenheit") as? Bool ?? (Locale.current.measurementSystem == .us)
+        generation = defaults.string(forKey: "generation").flatMap(Generation.init) ?? .v3
         #if targetEnvironment(simulator)
         demoMode = true
         #else
@@ -94,6 +102,31 @@ final class AppModel {
         linkState = link.state
         lastRefresh = .distantPast
         link.start()
+        restartSearchTimer()
+    }
+
+    private func restartSearchTimer() {
+        searchTimer?.cancel()
+        searchTimer = nil
+        isSlowToFind = false
+        timeSearch()
+    }
+
+    /// Counts how long Lull has been looking, across searching and connecting, but not while
+    /// another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
+    private func timeSearch() {
+        guard !demoMode, linkState == .searching || linkState == .connecting else {
+            searchTimer?.cancel()
+            searchTimer = nil
+            isSlowToFind = false
+            return
+        }
+        guard searchTimer == nil else { return }
+        searchTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.isSlowToFind = true
+        }
     }
 
     /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
@@ -105,6 +138,7 @@ final class AppModel {
 
     func appBecameActive() {
         link?.start()
+        restartSearchTimer()
     }
 
     func forgetDevice() {
@@ -114,7 +148,9 @@ final class AppModel {
 
     private func linkStateChanged(_ state: LinkState) {
         linkState = state
+        timeSearch()
         guard state == .ready, let link else { return }
+        generation = link.generation
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
         // only needs re-reading now and then.
@@ -170,12 +206,19 @@ final class AppModel {
     func startTonight() async {
         guard let schedule = tonight, let link else { return }
         await perform {
-            if self.deviceSlots.isEmpty { try await self.refreshSlots() }
-            guard let slot = self.slot ?? self.deviceSlots.firstIndex(of: nil) else {
-                self.needsSlotChoice = true
-                return
+            // A V2 holds just the one sequence, which Lull always replaces.
+            let slot: Int
+            if link.generation == .v2 {
+                slot = 0
+            } else {
+                if self.deviceSlots.isEmpty { try await self.refreshSlots() }
+                guard let free = self.slot ?? self.deviceSlots.firstIndex(of: nil) else {
+                    self.needsSlotChoice = true
+                    return
+                }
+                slot = free
+                self.slot = slot
             }
-            self.slot = slot
             try await link.store(schedule.program, slot: slot)
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
@@ -201,7 +244,7 @@ final class AppModel {
             default: nil
             }
             if let refusal {
-                try? await link.send(Codec.acknowledgeNotification)
+                try? await link.acknowledgeNotification()
                 throw refusal
             }
         }
@@ -235,7 +278,7 @@ final class AppModel {
     func setTemperature(_ halfCelsius: Int) async {
         guard let link else { return }
         await perform {
-            try await link.send(Codec.setTemperature(halfCelsius))
+            try await link.setTemperature(halfCelsius)
             try await self.extendRuntime()
         }
     }
@@ -243,7 +286,7 @@ final class AppModel {
     func setFan(percent: Int) async {
         guard let link else { return }
         await perform {
-            try await link.send(Codec.setFan(step: percent / 5 - 1))
+            try await link.setFan(step: percent / 5 - 1)
             try await self.extendRuntime()
         }
     }
@@ -251,7 +294,7 @@ final class AppModel {
     func setRuntime(minutes: Int) async {
         guard let link else { return }
         keepsLongestRuntime = false
-        await perform { try await link.send(Codec.setRuntime(minutes: minutes)) }
+        await perform { try await link.setRuntime(minutes: minutes) }
     }
 
     /// Air started from the Remote runs for as long as the BedJet allows, until a shorter time is
@@ -265,7 +308,7 @@ final class AppModel {
         for _ in 0..<20 {
             if let status, status.isRunning, status.maxRuntimeMinutes > 0, mode == nil || status.mode == mode {
                 if status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60 {
-                    try await link.send(Codec.setRuntime(minutes: status.maxRuntimeMinutes))
+                    try await link.setRuntime(minutes: status.maxRuntimeMinutes)
                 }
                 return
             }
@@ -275,12 +318,12 @@ final class AppModel {
 
     func setLED(_ on: Bool) async {
         guard let link else { return }
-        await perform { try await link.send(Codec.setLED(on)) }
+        await perform { try await link.setLED(on) }
     }
 
     func setMuted(_ muted: Bool) async {
         guard let link else { return }
-        await perform { try await link.send(Codec.setMuted(muted)) }
+        await perform { try await link.setMuted(muted) }
     }
 
     private func perform(_ work: () async throws -> Void) async {
@@ -327,6 +370,12 @@ final class AppModel {
     }
 
     // MARK: Schedules
+
+    /// Modes the Remote and the phase editor offer for this kind of BedJet.
+    var remoteModes: [Mode] { Mode.remoteModes.filter(generation.supports) }
+    var phaseModes: [Mode] { Mode.phaseModes.filter(generation.supports) }
+
+    func adjustsTemperature(_ mode: Mode) -> Bool { generation.adjustsTemperature(mode) }
 
     func save(_ schedule: Schedule) {
         if let index = schedules.firstIndex(where: { $0.id == schedule.id }) {

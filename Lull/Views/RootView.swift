@@ -89,6 +89,8 @@ struct ConnectionPill: View {
     }
 
     private var label: String {
+        // Invites a tap through to the things worth checking.
+        if model.isSlowToFind { return "Not found" }
         switch model.linkState {
         case .ready: return model.demoMode && !AppModel.labelsDemoAsConnected ? "Demo" : "Connected"
         case .connecting: return "Connecting"

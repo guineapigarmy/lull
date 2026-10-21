@@ -33,7 +33,8 @@ platform :ios do
     if live && Gem::Version.new(version) <= Gem::Version.new(live)
       # A version that is already live can't be submitted again, so wait for MARKETING_VERSION to be raised.
       UI.important("#{version} is already on the App Store. Raise MARKETING_VERSION to submit a new release.")
-      puts "::notice title=Nothing submitted::#{version} is already on the App Store. Raise MARKETING_VERSION to release."
+      # Straight to stdout: fastlane's own `puts` adds a timestamp, which hides the annotation from GitHub.
+      $stdout.puts "::notice title=Nothing submitted::#{version} is already on the App Store. Raise MARKETING_VERSION to release."
       next
     end
 

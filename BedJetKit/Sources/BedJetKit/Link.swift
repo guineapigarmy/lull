@@ -72,6 +72,7 @@ extension BedJetLink {
         guard program.steps.count <= Limits.stepsPerProgram else {
             throw BedJetError.invalidProgram("A BedJet schedule can hold up to \(Limits.stepsPerProgram) phases.")
         }
+        guard program.steps.allSatisfy(\.fitsUnitLimits) else { throw BedJetError.programTooLong }
         for command in Codec.writeProgram(slot: slot, steps: program.steps) {
             try await send(command)
         }

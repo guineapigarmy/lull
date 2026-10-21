@@ -18,6 +18,8 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(status.extra?.programStep, 0)
         XCTAssertEqual(status.extra?.ledEnabled, true)
         XCTAssertEqual(status.extra?.beepsMuted, true)
+        XCTAssertEqual(status.lastShutdownReason, 0)
+        XCTAssertEqual(status.extra?.notification, Codec.Notification.cleanFilter)
     }
 
     func testFirstChunkAloneStillParses() throws {
@@ -121,5 +123,46 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(latest?.mode, .cool)
         XCTAssertEqual(latest?.fanStep, 5)
         XCTAssertEqual(latest?.extra?.programStep, 1)
+    }
+
+    /// Values follow the heat table in the official BedJet app (v1.0.6), which keeps the unit's safety cut-off.
+    func testHeatIsCutOffSoonerWhenHotterAndFaster() {
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 80, fanStep: 19), 60)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 75, fanStep: 19), 120)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 80, fanStep: 0), 240)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 81, fanStep: 0), 60)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 66, fanStep: 19), Limits.maxStepMinutes)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 50, fanStep: 19), Limits.maxStepMinutes)
+        XCTAssertEqual(ProgramStep.longestMinutes(mode: .cool, temperature: 80, fanStep: 19), Limits.maxStepMinutes)
+        XCTAssertFalse(ProgramStep(mode: .heat, fanStep: 19, temperature: 80, hours: 2, minutes: 0).fitsUnitLimits)
+        XCTAssertTrue(ProgramStep(mode: .heat, fanStep: 19, temperature: 80, hours: 1, minutes: 0).fitsUnitLimits)
+        XCTAssertTrue(ProgramStep(mode: .heat, fanStep: 19, temperature: 80, hours: 6, minutes: 0, endsAtClockTime: true).fitsUnitLimits)
+    }
+
+    @MainActor
+    func testProgramsPastTheHeatCutOffAreNotSaved() async {
+        let link = DemoLink()
+        let program = StoredProgram(name: "too hot", steps: [ProgramStep(mode: .heat, fanStep: 19, temperature: 80, hours: 3, minutes: 0)])
+        do {
+            try await link.store(program, slot: 0)
+            XCTFail("stored a step the unit would cut off")
+        } catch {
+            XCTAssertEqual(error as? BedJetError, .programTooLong)
+        }
+        XCTAssertNil(link.slots[0])
+    }
+
+    @MainActor
+    func testUnitRefusesAProgramItCannotFinishUntilAcknowledged() async throws {
+        let tooHot = ProgramStep(mode: .heat, fanStep: 19, temperature: 80, hours: 3, minutes: 0)
+        let link = DemoLink(slots: [StoredProgram(name: "too hot", steps: [tooHot]), nil, nil])
+        var latest: DeviceStatus?
+        link.onStatus = { latest = $0 }
+        try await link.startProgram(slot: 0)
+        XCTAssertEqual(latest?.mode, .standby)
+        XCTAssertEqual(latest?.extra?.programStep, 0)
+        XCTAssertEqual(latest?.extra?.notification, Codec.Notification.programTooLong)
+        try await link.send(Codec.acknowledgeNotification)
+        XCTAssertEqual(latest?.extra?.notification, 0)
     }
 }

@@ -27,6 +27,12 @@ struct Phase: Identifiable, Codable, Hashable {
         }
     }
 
+    /// Longest this phase may run: the mode's own ceiling, and for Heat the BedJet's safety cut-off,
+    /// which comes sooner the hotter and faster the air.
+    var maxMinutes: Int {
+        min(mode.maxMinutes, ProgramStep.longestMinutes(mode: mode, temperature: temperature, fanStep: fanPercent / 5 - 1))
+    }
+
     var step: ProgramStep {
         ProgramStep(mode: mode, fanStep: fanPercent / 5 - 1, temperature: temperature, hours: minutes / 60, minutes: minutes % 60)
     }

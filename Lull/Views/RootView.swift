@@ -10,6 +10,7 @@ struct RootView: View {
         TabView(selection: $selectedTab) {
             Tab("Remote", systemImage: "dial.medium.fill", value: 0) { RemoteView() }
             Tab("Schedule", systemImage: "moon.stars.fill", value: 1) { ScheduleView() }
+            Tab("History", systemImage: "clock.arrow.circlepath", value: 2) { HistoryView() }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

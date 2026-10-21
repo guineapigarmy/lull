@@ -78,6 +78,75 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Use Warm Welcome tonight"].waitForExistence(timeout: 5))
     }
 
+    func testHistoryKeepsTheNight() {
+        app.tabBars.buttons["History"].tap()
+        XCTAssertTrue(app.staticTexts["No nights yet"].waitForExistence(timeout: 10))
+
+        app.tabBars.buttons["Remote"].tap()
+        let heat = app.buttons["Heat"]
+        XCTAssertTrue(heat.waitForExistence(timeout: 10))
+        sleep(2)
+        heat.tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
+        // A setting is recorded once the BedJet has held it for a few seconds.
+        sleep(4)
+        app.buttons["Off"].tap()
+        sleep(4)
+
+        // A schedule's phases are its own; only its start and end are recorded.
+        app.tabBars.buttons["Schedule"].tap()
+        let start = app.buttons["Start Night"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        start.tap()
+        let end = app.buttons["End Night"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        sleep(4)
+        end.tap()
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        sleep(4)
+
+        app.tabBars.buttons["History"].tap()
+        // The night is one row named after the schedule that ran, and opens up to the whole night.
+        let night = app.buttons["Night"]
+        XCTAssertTrue(night.waitForExistence(timeout: 5))
+        XCTAssertTrue(night.label.hasSuffix("Cool Drift"))
+        XCTAssertFalse(app.staticTexts["Turned off"].exists)
+        capture("history-collapsed")
+        night.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat ·'")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Turned off"].exists)
+        XCTAssertTrue(app.staticTexts["Started Cool Drift"].exists)
+        XCTAssertTrue(app.staticTexts["Ended Cool Drift"].exists)
+        // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool ·'")).count, 0)
+        sleep(1)
+        capture("history-expanded")
+
+        night.tap()
+        XCTAssertTrue(app.staticTexts["Turned off"].waitForNonExistence(timeout: 5))
+    }
+
+    func testHistoryListsNightsAsRows() {
+        app.terminate()
+        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launch()
+        app.tabBars.buttons["History"].tap()
+
+        let nights = app.buttons.matching(identifier: "Night")
+        XCTAssertTrue(nights.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(nights.count, 3)
+        // Newest first; a night without a schedule is summed up by its times instead.
+        XCTAssertTrue(nights.element(boundBy: 0).label.hasSuffix("Cool Drift"))
+        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" – "))
+        capture("history-rows")
+
+        nights.element(boundBy: 1).tap()
+        XCTAssertTrue(app.staticTexts["Turned off"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Timer ran out'")).firstMatch.exists)
+        sleep(1)
+        capture("history-row-expanded")
+    }
+
     func testRemoteAndDevice() {
         let heat = app.buttons["Heat"]
         XCTAssertTrue(heat.waitForExistence(timeout: 10))

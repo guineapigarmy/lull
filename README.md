@@ -13,6 +13,8 @@ the night keeps going.
 - **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
   BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
+- **History**: every change through the night, with the time and room temperature, so the morning
+  after you can see what you picked and when.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.

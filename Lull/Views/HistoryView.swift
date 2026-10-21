@@ -1,9 +1,10 @@
 import BedJetKit
 import SwiftUI
 
-/// What the BedJet did each night, so the morning after you can see what you picked at 3 a.m. and whether it helped.
+/// What the BedJet did each night, so the morning after you can see what you picked at 3 a.m.
 struct HistoryView: View {
     @Environment(AppModel.self) private var model
+    @State private var expanded: Set<Night.ID> = []
 
     var body: some View {
         Screen(title: "History") {
@@ -18,30 +19,74 @@ struct HistoryView: View {
                     }
                 }
             }
-            ForEach(nights) { night in NightCard(night: night) }
+            VStack(spacing: 10) {
+                ForEach(nights) { night in
+                    NightRow(night: night, isExpanded: expanded.contains(night.id)) {
+                        if expanded.remove(night.id) == nil { expanded.insert(night.id) }
+                    }
+                }
+            }
         }
+        .animation(.smooth(duration: 0.35), value: expanded)
     }
 }
 
-private struct NightCard: View {
-    @Environment(AppModel.self) private var model
+/// One night at a glance, opening up to everything that happened in it.
+private struct NightRow: View {
     let night: Night
+    let isExpanded: Bool
+    let toggle: () -> Void
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Eyebrow(night.relativeName() ?? night.evening.formatted(.dateTime.weekday(.wide)))
-                    Text(night.evening.formatted(.dateTime.month(.wide).day())).font(.system(size: 26, weight: .semibold))
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(night.entries.enumerated()), id: \.element.id) { index, entry in
-                        EntryRow(entry: entry, isLast: index == night.entries.count - 1)
+        Card(padding: 18) {
+            VStack(alignment: .leading, spacing: 20) {
+                Button(action: toggle) {
+                    HStack(spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
+                            Text(summary)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Theme.secondary)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        NightCurve(phases: night.phases, lineWidth: 2).frame(width: 88, height: 40)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.tertiary)
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     }
+                    .contentShape(Rectangle())
                 }
-                ReviewEditor(review: .init(get: { model.review(of: night) }, set: { model.setReview($0, of: night) }))
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(title), \(summary)")
+                .accessibilityHint(isExpanded ? "Hides this night" : "Shows everything that happened this night")
+                .accessibilityIdentifier("Night")
+
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(night.entries.enumerated()), id: \.element.id) { index, entry in
+                            EntryRow(entry: entry, isLast: index == night.entries.count - 1)
+                        }
+                    }
+                    .transition(.opacity)
+                }
             }
         }
+    }
+
+    private var title: String {
+        night.evening.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// The schedule that ran, or else when the first and last changes happened.
+    private var summary: String {
+        let names = night.scheduleNames
+        if !names.isEmpty { return names.joined(separator: ", ") }
+        guard let first = night.entries.first?.date, let last = night.entries.last?.date else { return "" }
+        let start = first.formatted(date: .omitted, time: .shortened), end = last.formatted(date: .omitted, time: .shortened)
+        return start == end ? start : "\(start) – \(end)"
     }
 }
 
@@ -85,7 +130,7 @@ private struct EntryRow: View {
         case let .air(mode, temperature, fan):
             return mode.usesTemperature ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
         case .off: return "Turned off"
-        case let .scheduleStarted(name): return "Started \(name ?? "a schedule")"
+        case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"
         case let .scheduleEnded(name, ending):
             let name = name ?? "Schedule"
             switch ending {
@@ -121,45 +166,5 @@ private struct EntryRow: View {
         case .off: return Theme.neutral
         case .scheduleStarted, .scheduleEnded: return .white
         }
-    }
-}
-
-/// A quick verdict on the night, plus a note for what to try next time.
-private struct ReviewEditor: View {
-    @Binding var review: NightReview
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("How did you sleep?").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.secondary)
-            HStack(spacing: 10) {
-                choice(.good, "Slept well", symbol: "hand.thumbsup")
-                choice(.bad, "Not great", symbol: "hand.thumbsdown")
-            }
-            TextField("What would you change?", text: $review.note, axis: .vertical)
-                .font(.system(size: 15))
-                .lineLimit(1...4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(Theme.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Theme.hairline))
-        }
-        .padding(.top, 4)
-    }
-
-    private func choice(_ rating: NightReview.Rating, _ title: String, symbol: String) -> some View {
-        let isSelected = review.rating == rating
-        return Button {
-            review.rating = isSelected ? nil : rating
-        } label: {
-            Label(title, systemImage: isSelected ? "\(symbol).fill" : symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isSelected ? Color.black : Color.white)
-                .frame(maxWidth: .infinity, minHeight: 40)
-                .background(isSelected ? Color.white : Theme.raised, in: Capsule())
-                .overlay(Capsule().strokeBorder(isSelected ? Color.clear : Theme.hairline))
-        }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isSelected)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

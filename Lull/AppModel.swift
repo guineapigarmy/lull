@@ -41,8 +41,6 @@ final class AppModel {
 
     /// What the BedJet did, oldest first, so the morning after can be checked against how the night felt.
     private(set) var history: [HistoryEntry] = []
-    /// Keyed by `Night.id`.
-    var reviews: [String: NightReview] = [:] { didSet { saveHistory() } }
     var nights: [Night] { Night.group(history) }
 
     var useFahrenheit: Bool { didSet { UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit") } }
@@ -73,7 +71,6 @@ final class AppModel {
     private var settling: Task<Void, Never>?
     private var connectedAt = Date.distantPast
     private var lastCommandAt = Date.distantPast
-    private var isLoadingHistory = false
 
     var tonight: Schedule? { schedules.first { $0.id == tonightID } ?? schedules.first }
     var isConnected: Bool { linkState == .ready }
@@ -242,7 +239,7 @@ final class AppModel {
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
             self.run = ActiveRun(schedule: schedule, startedAt: Date())
-            self.record(.scheduleStarted(name: schedule.name))
+            self.record(.scheduleStarted(name: schedule.name, phases: schedule.phases))
             if let demo = link as? DemoLink, Self.demoElapsedMinutes > 0 {
                 demo.skipAhead(minutes: Self.demoElapsedMinutes)
                 self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-Self.demoElapsedMinutes * 60))
@@ -461,7 +458,7 @@ final class AppModel {
         switch (before.programStep, now.programStep) {
         case (0, 1...):
             // Started from this phone, it is recorded once the BedJet confirms it.
-            if run == nil, !isBusy { record(.scheduleStarted(name: nil), noticedLater: wasAway) }
+            if run == nil, !isBusy { record(.scheduleStarted(name: nil, phases: nil), noticedLater: wasAway) }
             return
         // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.
         case (1..., 1...) where before.programStep != now.programStep: return
@@ -487,17 +484,8 @@ final class AppModel {
         saveHistory()
     }
 
-    func review(of night: Night) -> NightReview {
-        reviews[night.id] ?? NightReview()
-    }
-
-    func setReview(_ review: NightReview, of night: Night) {
-        reviews[night.id] = review.isEmpty ? nil : review
-    }
-
     private struct SavedHistory: Codable {
         var entries: [HistoryEntry]
-        var reviews: [String: NightReview]
         var lastSeen: Seen?
     }
 
@@ -511,16 +499,13 @@ final class AppModel {
         settling = nil
         observed = nil
         let saved = Self.isEphemeral ? nil : (try? Data(contentsOf: historyFile)).flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
-        isLoadingHistory = true
-        history = saved?.entries ?? []
-        reviews = saved?.reviews ?? [:]
+        history = saved?.entries ?? (Self.seedsDemoHistory ? HistoryEntry.samples() : [])
         lastSeen = saved?.lastSeen
-        isLoadingHistory = false
     }
 
     private func saveHistory() {
-        guard !isLoadingHistory, !Self.isEphemeral else { return }
-        let saved = SavedHistory(entries: history, reviews: reviews, lastSeen: lastSeen)
+        guard !Self.isEphemeral else { return }
+        let saved = SavedHistory(entries: history, lastSeen: lastSeen)
         try? FileManager.default.createDirectory(at: historyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(saved).write(to: historyFile, options: .atomic)
     }
@@ -558,6 +543,8 @@ final class AppModel {
     static let labelsDemoAsConnected = ProcessInfo.processInfo.arguments.contains("-demoLabelConnected")
     /// Launching with `-demoElapsedMinutes 200` makes a night started in demo mode appear that far along.
     private static let demoElapsedMinutes = UserDefaults.standard.integer(forKey: "demoElapsedMinutes")
+    /// Launching with `-demoHistory` fills an empty History with a few sample nights, for listing screenshots.
+    private static let seedsDemoHistory = ProcessInfo.processInfo.arguments.contains("-demoHistory")
     /// UI tests launch with this flag so every run starts from the built-in schedules.
     private static let isEphemeral = ProcessInfo.processInfo.arguments.contains("-ephemeral")
 

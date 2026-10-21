@@ -106,18 +106,45 @@ final class LullUITests: XCTestCase {
         sleep(4)
 
         app.tabBars.buttons["History"].tap()
+        // The night is one row named after the schedule that ran, and opens up to the whole night.
+        let night = app.buttons["Night"]
+        XCTAssertTrue(night.waitForExistence(timeout: 5))
+        XCTAssertTrue(night.label.hasSuffix("Cool Drift"))
+        XCTAssertFalse(app.staticTexts["Turned off"].exists)
+        capture("history-collapsed")
+        night.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat ·'")).firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Turned off"].exists)
         XCTAssertTrue(app.staticTexts["Started Cool Drift"].exists)
         XCTAssertTrue(app.staticTexts["Ended Cool Drift"].exists)
         // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool ·'")).count, 0)
-
-        let sleptWell = app.buttons["Slept well"]
-        sleptWell.tap()
-        XCTAssertTrue(sleptWell.isSelected)
         sleep(1)
-        capture("history")
+        capture("history-expanded")
+
+        night.tap()
+        XCTAssertTrue(app.staticTexts["Turned off"].waitForNonExistence(timeout: 5))
+    }
+
+    func testHistoryListsNightsAsRows() {
+        app.terminate()
+        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launch()
+        app.tabBars.buttons["History"].tap()
+
+        let nights = app.buttons.matching(identifier: "Night")
+        XCTAssertTrue(nights.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(nights.count, 3)
+        // Newest first; a night without a schedule is summed up by its times instead.
+        XCTAssertTrue(nights.element(boundBy: 0).label.hasSuffix("Cool Drift"))
+        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" – "))
+        capture("history-rows")
+
+        nights.element(boundBy: 1).tap()
+        XCTAssertTrue(app.staticTexts["Turned off"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Timer ran out'")).firstMatch.exists)
+        sleep(1)
+        capture("history-row-expanded")
     }
 
     func testRemoteAndDevice() {

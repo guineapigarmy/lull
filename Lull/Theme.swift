@@ -40,6 +40,8 @@ struct Eyebrow: View {
             .font(.system(size: 11, weight: .semibold))
             .tracking(1.6)
             .foregroundStyle(Theme.secondary)
+            // Read as written rather than in capitals, which VoiceOver can spell out letter by letter.
+            .accessibilityLabel(text)
     }
 }
 
@@ -77,6 +79,8 @@ struct PrimaryButtonStyle: ButtonStyle {
 struct LabeledSlider: View {
     let title: String
     let valueText: String
+    /// What VoiceOver reads for the value, when the shown text abbreviates it.
+    var spokenValue: String?
     @Binding var value: Double
     let range: ClosedRange<Double>
     var step: Double = 1
@@ -92,10 +96,12 @@ struct LabeledSlider: View {
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
+            // The slider says the same, so VoiceOver stops once, on the control it can adjust.
+            .accessibilityHidden(true)
             Slider(value: $value, in: range, step: step)
                 .tint(tint)
                 .accessibilityLabel(title)
-                .accessibilityValue(valueText)
+                .accessibilityValue(spokenValue ?? valueText)
                 .sensoryFeedback(.selection, trigger: value)
         }
     }

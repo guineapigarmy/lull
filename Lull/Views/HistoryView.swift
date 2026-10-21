@@ -44,7 +44,7 @@ private struct NightRow: View {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
-                            Text(summary)
+                            Text(summary(through: "–"))
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Theme.secondary)
                                 .monospacedDigit()
@@ -60,7 +60,8 @@ private struct NightRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(title), \(summary)")
+                .accessibilityLabel("\(title), \(summary(through: "to"))")
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
                 .accessibilityHint(isExpanded ? "Hides this night" : "Shows everything that happened this night")
                 .accessibilityIdentifier("Night")
 
@@ -81,12 +82,12 @@ private struct NightRow: View {
     }
 
     /// The schedule that ran, or else when the first and last changes happened.
-    private var summary: String {
+    private func summary(through separator: String) -> String {
         let names = night.scheduleNames
         if !names.isEmpty { return names.joined(separator: ", ") }
         guard let first = night.entries.first?.date, let last = night.entries.last?.date else { return "" }
         let start = first.formatted(date: .omitted, time: .shortened), end = last.formatted(date: .omitted, time: .shortened)
-        return start == end ? start : "\(start) – \(end)"
+        return start == end ? start : "\(start) \(separator) \(end)"
     }
 }
 
@@ -109,14 +110,17 @@ private struct EntryRow: View {
                     .foregroundStyle(tint)
                     .frame(width: 28, height: 28)
                     .background(tint.opacity(0.16), in: Circle())
+                    .accessibilityHidden(true)
                 // Joins the entries into one line through the night.
                 if !isLast {
                     Rectangle().fill(Theme.hairline).frame(width: 1).frame(minHeight: 14)
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 16, weight: .semibold))
-                if let detail { Text(detail).font(.system(size: 13)).foregroundStyle(Theme.secondary) }
+                Text(title(spoken: false)).font(.system(size: 16, weight: .semibold)).accessibilityLabel(title(spoken: true))
+                if let detail = detail(spoken: false) {
+                    Text(detail).font(.system(size: 13)).foregroundStyle(Theme.secondary).accessibilityLabel(self.detail(spoken: true) ?? detail)
+                }
             }
             .padding(.top, 4)
             .padding(.bottom, isLast ? 0 : 14)
@@ -125,10 +129,12 @@ private struct EntryRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var title: String {
+    /// Parts are joined with a dot on screen; VoiceOver gets commas and durations in words.
+    private func title(spoken: Bool) -> String {
         switch entry.event {
         case let .air(mode, temperature, fan):
-            return model.adjustsTemperature(mode) ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
+            let parts = model.adjustsTemperature(mode) ? [mode.title, model.degrees(temperature), "fan \(fan)%"] : [mode.title, "fan \(fan)%"]
+            return parts.joined(separator: spoken ? ", " : " · ")
         case .off: return "Turned off"
         case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"
         case let .scheduleEnded(name, ending):
@@ -136,17 +142,18 @@ private struct EntryRow: View {
             switch ending {
             case .byYou: return "Ended \(name)"
             case .finished: return "\(name) finished"
-            case .early(let minutes): return "\(name) stopped \(Format.duration(minutes)) early"
+            case .early(let minutes):
+                return "\(name) stopped \(spoken ? Format.spokenDuration(minutes) : Format.duration(minutes)) early"
             }
         }
     }
 
-    private var detail: String? {
+    private func detail(spoken: Bool) -> String? {
         var parts: [String] = []
         if case .off(timerRanOut: true) = entry.event { parts.append("Timer ran out") }
         if let room = entry.room { parts.append("Room \(model.degrees(room))") }
         if entry.noticedLater { parts.append("Seen when Lull reopened") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return parts.isEmpty ? nil : parts.joined(separator: spoken ? ", " : " · ")
     }
 
     private var symbol: String {

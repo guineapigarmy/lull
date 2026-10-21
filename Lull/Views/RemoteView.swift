@@ -26,7 +26,8 @@ struct RemoteView: View {
                     .frame(maxWidth: .infinity)
             }
 
-            ModePicker(modes: model.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
+            ModePicker(modes: model.remoteModes + [.standby], selection: chosenMode ?? status?.mode,
+                       hint: model.run != nil ? "Ends the schedule that's running" : nil) { mode in
                 chosenMode = mode
                 Task {
                     await model.setMode(mode)
@@ -47,7 +48,8 @@ struct RemoteView: View {
                         }, range: 5...100, step: 5, tint: mode.tint)
                         if model.run == nil {
                             let limit = runtimeLimit(status)
-                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)), value: sending($runtime, "runtime") {
+                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)),
+                                          spokenValue: Format.spokenDuration(Int(runtime)), value: sending($runtime, "runtime") {
                                 await model.setRuntime(minutes: Int(runtime))
                             }, range: limit.range, step: limit.step)
                         } else {
@@ -59,6 +61,9 @@ struct RemoteView: View {
                                     .font(.system(size: 20, weight: .semibold))
                                     .monospacedDigit()
                             }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Phase ends in")
+                            .accessibilityValue(Format.spokenDuration(minutesLeft(status)))
                         }
                     }
                 }
@@ -154,6 +159,18 @@ struct ClimateOrb: View {
         }
         .frame(width: 204, height: 204)
         .animation(.smooth(duration: 0.6), value: mode)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenStatus)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var spokenStatus: String {
+        guard let status else { return "Looking for your BedJet" }
+        guard status.isRunning else { return "Off, room \(model.degrees(status.ambientTemperature))" }
+        var parts = [status.mode.activity]
+        if model.adjustsTemperature(status.mode) { parts.append("set to \(model.degrees(status.targetTemperature))") }
+        parts.append("fan \(status.fanPercent)%")
+        parts.append("air \(model.degrees(status.actualTemperature))")
+        return parts.joined(separator: ", ")
     }
 }

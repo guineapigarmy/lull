@@ -38,7 +38,7 @@ final class LullUITests: XCTestCase {
 
         let end = app.buttons["End Night"]
         XCTAssertTrue(end.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'PHASE 1 OF'")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Phase 1 of'")).firstMatch.exists)
         sleep(2)
         capture("schedule-running")
 
@@ -54,7 +54,7 @@ final class LullUITests: XCTestCase {
 
         // Remote stays loaded behind the editor and has its own Turbo and Gentle heat buttons,
         // so match the phase row by its duration and take the frontmost mode button.
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Turbo' AND label CONTAINS '10 min'")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'Turbo' AND label CONTAINS '10 minutes'")).firstMatch.tap()
         XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
         let gentleHeat = app.buttons.matching(identifier: "Gentle heat")
         gentleHeat.element(boundBy: gentleHeat.count - 1).tap()
@@ -113,12 +113,12 @@ final class LullUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Turned off"].exists)
         capture("history-collapsed")
         night.tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat ·'")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat,'")).firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Turned off"].exists)
         XCTAssertTrue(app.staticTexts["Started Cool Drift"].exists)
         XCTAssertTrue(app.staticTexts["Ended Cool Drift"].exists)
         // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool ·'")).count, 0)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool,'")).count, 0)
         sleep(1)
         capture("history-expanded")
 
@@ -137,7 +137,7 @@ final class LullUITests: XCTestCase {
         XCTAssertEqual(nights.count, 3)
         // Newest first; a night without a schedule is summed up by its times instead.
         XCTAssertTrue(nights.element(boundBy: 0).label.hasSuffix("Cool Drift"))
-        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" – "))
+        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" to "))
         capture("history-rows")
 
         nights.element(boundBy: 1).tap()
@@ -155,23 +155,23 @@ final class LullUITests: XCTestCase {
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
-        expectation(for: NSPredicate(format: "value == '4 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
 
         // A shorter time picked by hand sticks, and survives a fan change.
         timer.adjust(toNormalizedSliderPosition: 0)
         sleep(3)
-        XCTAssertEqual(timer.value as? String, "5 min")
+        XCTAssertEqual(timer.value as? String, "5 minutes")
         app.sliders["Fan"].adjust(toNormalizedSliderPosition: 0.8)
         sleep(3)
-        XCTAssertEqual(timer.value as? String, "5 min")
+        XCTAssertEqual(timer.value as? String, "5 minutes")
 
         // Switching mode starts over at that mode's longest run.
         app.buttons["Cool"].tap()
-        expectation(for: NSPredicate(format: "value == '12 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '12 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         app.buttons["Heat"].tap()
-        expectation(for: NSPredicate(format: "value == '4 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         capture("remote-heat")
         app.buttons["Off"].tap()

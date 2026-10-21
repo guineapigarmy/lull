@@ -548,6 +548,15 @@ final class AppModel {
         "\(Format.degrees(halfCelsius, fahrenheit: useFahrenheit))°"
     }
 
+    /// A phase in words for VoiceOver, such as "Heat, 75°, fan 40%, 30 minutes".
+    func spokenSummary(of phase: Phase) -> String {
+        var parts = [phase.mode.title]
+        if adjustsTemperature(phase.mode) { parts.append(degrees(phase.temperature)) }
+        if phase.mode.usesFan { parts.append("fan \(phase.fanPercent)%") }
+        parts.append(Format.spokenDuration(phase.minutes))
+        return parts.joined(separator: ", ")
+    }
+
     // MARK: Persistence
 
     private struct Saved: Codable {

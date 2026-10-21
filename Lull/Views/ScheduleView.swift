@@ -27,7 +27,7 @@ struct ScheduleView: View {
 
             let others = model.schedules.filter { $0.id != featuredID }
             if !others.isEmpty {
-                Eyebrow("More schedules").padding(.top, 8)
+                Eyebrow("More schedules").padding(.top, 8).accessibilityAddTraits(.isHeader)
                 ForEach(others) { schedule in row(schedule) }
             }
             Button {
@@ -54,10 +54,18 @@ struct ScheduleView: View {
                         Eyebrow("Tonight")
                         Text(schedule.name).font(.system(size: 26, weight: .semibold))
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button("Edit") { editing = schedule }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Theme.secondary)
+                        // A full-size target without moving the text.
+                        .padding(12)
+                        .contentShape(Rectangle())
+                        .padding(-12)
+                        .accessibilityLabel("Edit \(schedule.name)")
+                        .accessibilityActions { moreActions(schedule) }
                 }
                 NightTimeline(schedule: schedule, startMinute: minuteOfDay(Date()))
                 Button {
@@ -66,6 +74,8 @@ struct ScheduleView: View {
                     if model.isBusy { ProgressView().tint(.black) } else { Text("Start Night") }
                 }
                 .buttonStyle(PrimaryButtonStyle())
+                .accessibilityLabel("Start Night")
+                .accessibilityValue(model.isBusy ? "Starting" : "")
                 .disabled(!model.canControl || model.isBusy)
 
                 Text(startHint)
@@ -92,12 +102,13 @@ struct ScheduleView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Eyebrow("Running now")
-                    Text("Phase \(step)").font(.system(size: 26, weight: .semibold))
+                    Text("Phase \(step)").font(.system(size: 26, weight: .semibold)).accessibilityAddTraits(.isHeader)
                     if let status = model.status {
-                        Label("\(status.mode.activity) · \(Format.duration(max((status.remainingSeconds + 59) / 60, 1))) left in this phase",
-                              systemImage: status.mode.symbol)
+                        let minutes = max((status.remainingSeconds + 59) / 60, 1)
+                        Label("\(status.mode.activity) · \(Format.duration(minutes)) left in this phase", systemImage: status.mode.symbol)
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(status.mode.tint)
+                            .accessibilityLabel("\(status.mode.activity), \(Format.spokenDuration(minutes)) left in this phase")
                     }
                     Text("This schedule was started from another phone or the BedJet's own remote.")
                         .font(.system(size: 13))
@@ -116,11 +127,12 @@ struct ScheduleView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Eyebrow(current.map { "Phase \($0.index + 1) of \(run.schedule.phases.count)" } ?? "Finishing")
-                    Text(run.schedule.name).font(.system(size: 26, weight: .semibold))
+                    Text(run.schedule.name).font(.system(size: 26, weight: .semibold)).accessibilityAddTraits(.isHeader)
                     if let current {
                         Label("\(current.phase.mode.activity) · \(Format.duration(current.minutesLeft)) left", systemImage: current.phase.mode.symbol)
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(current.phase.mode.tint)
+                            .accessibilityLabel("\(current.phase.mode.activity), \(Format.spokenDuration(current.minutesLeft)) left")
                     }
                 }
                 NightTimeline(schedule: run.schedule, startMinute: minuteOfDay(run.startedAt), progress: run.progress(at: now))
@@ -134,6 +146,9 @@ struct ScheduleView: View {
     private func row(_ schedule: Schedule) -> some View {
         Button { editing = schedule } label: { ScheduleRow(schedule: schedule) }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(schedule.name), \(Format.spokenDuration(schedule.totalMinutes)), \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
+            .accessibilityHint("Edits this schedule")
+            .accessibilityActions { moreActions(schedule) }
             .overlay(alignment: .topTrailing) {
                 // Swapping schedules waits until the one that is running has ended.
                 if model.run == nil {
@@ -158,6 +173,12 @@ struct ScheduleView: View {
     @ViewBuilder
     private func menu(_ schedule: Schedule) -> some View {
         Button("Edit", systemImage: "slider.horizontal.3") { editing = schedule }
+        moreActions(schedule)
+    }
+
+    /// The menu's other choices, also offered to VoiceOver as actions on the schedule.
+    @ViewBuilder
+    private func moreActions(_ schedule: Schedule) -> some View {
         Button("Duplicate", systemImage: "plus.square.on.square") {
             var copy = schedule
             copy.id = UUID()

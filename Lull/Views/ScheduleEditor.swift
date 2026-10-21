@@ -16,6 +16,8 @@ struct ScheduleEditor: View {
                         .font(.system(size: 30, weight: .bold))
                         .focused($nameFocused)
                         .submitLabel(.done)
+                        .accessibilityLabel("Schedule name")
+                        .accessibilityHint("Up to \(Limits.nameLength) characters")
                         .onChange(of: schedule.name) { _, name in
                             // The BedJet stores 15 characters.
                             if name.count > Limits.nameLength { schedule.name = String(name.prefix(Limits.nameLength)) }
@@ -28,10 +30,13 @@ struct ScheduleEditor: View {
 
                     bedtimeRow
 
-                    Eyebrow("Phases")
+                    Eyebrow("Phases").accessibilityAddTraits(.isHeader)
                     VStack(spacing: 10) {
-                        ForEach($schedule.phases) { $phase in
-                            PhaseRow(phase: phase, startsAt: schedule.startMinute(of: phase)) { selection = phase.id }
+                        ForEach(Array(schedule.phases.enumerated()), id: \.element.id) { index, phase in
+                            PhaseRow(phase: phase, number: index + 1, startsAt: schedule.startMinute(of: phase),
+                                     onDelete: schedule.phases.count > 1 ? { schedule.phases.removeAll { $0.id == phase.id } } : nil) {
+                                selection = phase.id
+                            }
                         }
                     }
                     if schedule.phases.count < Limits.stepsPerProgram {
@@ -96,6 +101,7 @@ struct ScheduleEditor: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.secondary)
                 }
+                .accessibilityElement(children: .combine)
             }
         }
     }
@@ -117,7 +123,10 @@ struct ScheduleEditor: View {
 private struct PhaseRow: View {
     @Environment(AppModel.self) private var model
     let phase: Phase
+    let number: Int
     let startsAt: Int
+    /// Nil when this is the only phase, which can't be removed.
+    let onDelete: (() -> Void)?
     let action: () -> Void
 
     var body: some View {
@@ -145,6 +154,11 @@ private struct PhaseRow: View {
             .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.hairline))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Phase \(number), \(model.spokenSummary(of: phase)), starts \(Format.clock(startsAt))")
+        .accessibilityHint("Edits this phase")
+        .accessibilityActions {
+            if let onDelete { Button("Remove Phase", role: .destructive, action: onDelete) }
+        }
     }
 
     private var detail: String {
@@ -165,7 +179,7 @@ private struct PhaseEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             HStack {
-                Text("Phase").font(.system(size: 22, weight: .bold))
+                Text("Phase").font(.system(size: 22, weight: .bold)).accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button("Done") { dismiss() }.font(.system(size: 17, weight: .semibold))
             }
@@ -179,7 +193,7 @@ private struct PhaseEditor: View {
             if phase.mode.usesFan {
                 LabeledSlider(title: "Fan", valueText: "\(phase.fanPercent)%", value: fan, range: 5...100, step: 5, tint: phase.mode.tint)
             }
-            LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), value: minutes,
+            LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), spokenValue: Format.spokenDuration(phase.minutes), value: minutes,
                           range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
             if isHeatLimited {
                 Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
@@ -248,6 +262,7 @@ struct TemperatureSlider: View {
 struct ModePicker: View {
     let modes: [Mode]
     let selection: Mode?
+    var hint: String?
     let onSelect: (Mode) -> Void
 
     var body: some View {
@@ -264,9 +279,13 @@ struct ModePicker: View {
                     .background(isSelected ? mode.tint : Theme.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(mode.title)
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityHint(isSelected ? "" : hint ?? "")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Mode")
         .sensoryFeedback(.selection, trigger: selection)
     }
 }

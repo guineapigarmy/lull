@@ -19,6 +19,22 @@ struct RootView: View {
             default: break
             }
         }
+        // Changes VoiceOver users would otherwise only notice by exploring the screen again.
+        .onChange(of: model.linkState) { old, state in
+            switch state {
+            case .ready: announce("BedJet connected")
+            case .yielded: announce("BedJet in use on another phone")
+            case .bluetoothOff: announce("Bluetooth is off")
+            case .unauthorized: announce("Bluetooth not allowed for Lull")
+            case .searching, .connecting: if old == .ready { announce("BedJet disconnected") }
+            }
+        }
+        .onChange(of: model.isSlowToFind) { _, slow in
+            if slow { announce("BedJet not found. The BedJet button at the top has tips.") }
+        }
+        .onChange(of: model.run?.schedule.name) { old, name in
+            if let name { announce("Started \(name)") } else if old != nil { announce("Night ended") }
+        }
         .alert("Something went wrong", isPresented: .init(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -35,6 +51,10 @@ struct RootView: View {
             Text("Lull keeps tonight's schedule in one slot on the BedJet. Pick one to reuse. Everything on the BedJet is already copied into your schedules.")
         }
     }
+
+    private func announce(_ message: String) {
+        AccessibilityNotification.Announcement(message).post()
+    }
 }
 
 /// Screen scaffold shared by the tabs: large title on the left, BedJet connection on the right.
@@ -50,7 +70,9 @@ struct Screen<Content: View>: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         if let subtitle { Eyebrow(subtitle) }
-                        Text(title).font(.system(size: 34, weight: .bold))
+                        Text(title)
+                            .font(.system(size: 34, weight: .bold))
+                            .accessibilityAddTraits(.isHeader)
                     }
                     Spacer()
                     ConnectionPill { showsDevice = true }
@@ -86,7 +108,12 @@ struct ConnectionPill: View {
             .overlay(Capsule().strokeBorder(Theme.hairline))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("BedJet, \(label)")
+        .accessibilityLabel("BedJet, \(spokenLabel)")
+        .accessibilityHint("Shows the connection, BedJet settings and help finding it")
+    }
+
+    private var spokenLabel: String {
+        model.linkState == .yielded && !model.isSlowToFind ? "in use on another phone" : label
     }
 
     private var label: String {

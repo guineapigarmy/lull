@@ -149,7 +149,7 @@ private struct PhaseRow: View {
 
     private var detail: String {
         var parts: [String] = []
-        if phase.mode.usesTemperature { parts.append(model.degrees(phase.temperature)) }
+        if model.adjustsTemperature(phase.mode) { parts.append(model.degrees(phase.temperature)) }
         if phase.mode.usesFan { parts.append("Fan \(phase.fanPercent)%") }
         return parts.isEmpty ? "Air off" : parts.joined(separator: " · ")
     }
@@ -169,11 +169,11 @@ private struct PhaseEditor: View {
                 Spacer()
                 Button("Done") { dismiss() }.font(.system(size: 17, weight: .semibold))
             }
-            ModePicker(modes: Mode.phaseModes, selection: phase.mode) { mode in
+            ModePicker(modes: model.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
                 if !mode.temperatureRange.contains(phase.temperature) { phase.temperature = mode.defaultTemperature }
             }
-            if phase.mode.usesTemperature {
+            if model.adjustsTemperature(phase.mode) {
                 TemperatureSlider(mode: phase.mode, temperature: $phase.temperature)
             }
             if phase.mode.usesFan {
@@ -182,7 +182,8 @@ private struct PhaseEditor: View {
             LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), value: minutes,
                           range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
             if isHeatLimited {
-                Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off. Use Gentle heat to run longer.")
+                Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
+                     + (model.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -198,7 +199,7 @@ private struct PhaseEditor: View {
         }
         .padding(24)
         .padding(.top, 8)
-        .presentationDetents([.height((phase.mode.usesTemperature ? 530 : 450) + (isHeatLimited ? 50 : 0))])
+        .presentationDetents([.height((model.adjustsTemperature(phase.mode) ? 530 : 450) + (isHeatLimited ? 50 : 0))])
         .presentationBackground(Theme.surface)
         .animation(.smooth(duration: 0.25), value: phase.mode)
         .onChange(of: phase.maxMinutes, initial: true) { _, longest in

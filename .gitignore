@@ -10,3 +10,9 @@ DerivedData/
 *.p12
 *.mobileprovision
 .env
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/README.md
+fastlane/test_output/
+vendor/bundle/
+.bundle/

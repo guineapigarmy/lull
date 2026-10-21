@@ -66,6 +66,11 @@ cd BedJetKit && swift run bedjetctl
 `bedjetctl` connects to the first BedJet it finds, prints its status, name, firmware and saved
 programs, then exits. It changes nothing on the device.
 
+## Releasing
+
+Pushes to `main` are built and submitted to App Store review by GitHub Actions. See
+[docs/RELEASING.md](docs/RELEASING.md).
+
 ## Contributing
 
 Contributions are welcome: bug reports, protocol findings, fixes and features. Read

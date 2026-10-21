@@ -1,0 +1,60 @@
+# Submits the newest commit on main to App Store review, released automatically once approved.
+# Off until the APP_STORE_RELEASE repository variable is "true". Setup: docs/RELEASING.md.
+name: App Store release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - screens.png
+      - screenshots/**
+      - app-store-screenshots/**
+  workflow_dispatch:
+
+# One release at a time. A push made while one runs waits, and only the newest waiting push runs.
+concurrency:
+  group: app-store-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: vars.APP_STORE_RELEASE == 'true'
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: app-store
+    env:
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      FASTLANE_SKIP_DOCS: "1"
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app
+
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Test BedJetKit
+        working-directory: BedJetKit
+        run: swift test
+
+      - name: Build, upload and submit for review
+        run: bundle exec fastlane ios release
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}

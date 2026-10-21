@@ -41,6 +41,9 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 5. Open a pull request against `main` describing what changed, why, and how you tested it. Include
    before/after screenshots for UI changes.
 
+Merges to `main` are submitted to the App Store automatically ([docs/RELEASING.md](docs/RELEASING.md)),
+so leave the version number and `fastlane/` release notes to the maintainer.
+
 ## Code style
 
 - Match the code around you: Swift, SwiftUI, `@Observable` models, Swift concurrency with `@MainActor`.

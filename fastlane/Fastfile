@@ -1,0 +1,86 @@
+# Builds the current commit, uploads it to App Store Connect and submits it for review.
+# Run by .github/workflows/app-store.yml on every push to main. One-time setup: docs/RELEASING.md.
+
+require "base64"
+require "tmpdir"
+
+default_platform(:ios)
+
+BUNDLE_ID = "com.rohankanjani.lull"
+TEAM_ID = "7786XZ3V4B"
+PROJECT = "Lull.xcodeproj"
+
+# Reads a build setting of the app target. `sh` runs from the fastlane folder, hence the "../".
+def build_setting(name)
+  output = sh("xcodebuild", "-showBuildSettings", "-project", "../#{PROJECT}", "-target", "Lull", log: false)
+  output[/^\s*#{name} = (.+)$/, 1].to_s.strip
+end
+
+platform :ios do
+  desc "Build, upload and submit the current commit to App Store review"
+  lane :release do
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_P8")
+    )
+
+    version = build_setting("MARKETING_VERSION")
+    live = Spaceship::ConnectAPI::App.find(BUNDLE_ID).get_live_app_store_version&.version_string
+    if live && Gem::Version.new(version) <= Gem::Version.new(live)
+      # A version that is already live can't be submitted again, so wait for MARKETING_VERSION to be raised.
+      UI.important("#{version} is already on the App Store. Raise MARKETING_VERSION to submit a new release.")
+      puts "::notice title=Nothing submitted::#{version} is already on the App Store. Raise MARKETING_VERSION to release."
+      next
+    end
+
+    uploaded = latest_testflight_build_number(api_key: api_key, app_identifier: BUNDLE_ID, version: version, initial_build_number: 0)
+    build = [uploaded.to_i, build_setting("CURRENT_PROJECT_VERSION").to_i].max + 1
+
+    # Sign with the Apple Distribution certificate from the secrets, in a throwaway keychain.
+    setup_ci
+    certificate = File.join(Dir.mktmpdir, "distribution.p12")
+    File.binwrite(certificate, Base64.decode64(ENV.fetch("DIST_CERT_P12_BASE64")))
+    import_certificate(
+      certificate_path: certificate,
+      certificate_password: ENV.fetch("DIST_CERT_PASSWORD"),
+      keychain_name: "fastlane_tmp_keychain",
+      keychain_password: ""
+    )
+    get_provisioning_profile(api_key: api_key, app_identifier: BUNDLE_ID, team_id: TEAM_ID)
+    profile = lane_context[SharedValues::SIGH_NAME]
+    update_code_signing_settings(
+      path: PROJECT,
+      targets: ["Lull"],
+      use_automatic_signing: false,
+      team_id: TEAM_ID,
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile
+    )
+
+    build_app(
+      project: PROJECT,
+      scheme: "Lull",
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: { provisioningProfiles: { BUNDLE_ID => profile } },
+      xcargs: "CURRENT_PROJECT_VERSION=#{build}",
+      output_directory: "build",
+      clean: true
+    )
+
+    upload_to_app_store(
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      app_version: version,
+      skip_screenshots: true,
+      # Pulls a version still waiting for review so this newer build replaces it.
+      reject_if_possible: true,
+      submit_for_review: true,
+      automatic_release: true,
+      run_precheck_before_submit: false,
+      submission_information: { add_id_info_uses_idfa: false },
+      force: true
+    )
+  end
+end

@@ -7,18 +7,25 @@ struct ScheduleEditor: View {
     @State var schedule: Schedule
     @State private var selection: Phase.ID?
     @FocusState private var nameFocused: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    TextField("Name", text: $schedule.name)
-                        .font(.system(size: 30, weight: .bold))
+                    // Wraps rather than clipping a long name at large text sizes; Return still finishes editing.
+                    TextField("Name", text: $schedule.name, axis: .vertical)
+                        .scaledFont(30, .bold)
                         .focused($nameFocused)
                         .submitLabel(.done)
                         .accessibilityLabel("Schedule name")
                         .accessibilityHint("Up to \(Limits.nameLength) characters")
                         .onChange(of: schedule.name) { _, name in
+                            if name.contains("\n") {
+                                schedule.name = name.replacingOccurrences(of: "\n", with: "")
+                                nameFocused = false
+                                return
+                            }
                             // The BedJet stores 15 characters.
                             if name.count > Limits.nameLength { schedule.name = String(name.prefix(Limits.nameLength)) }
                         }
@@ -93,15 +100,20 @@ struct ScheduleEditor: View {
     }
 
     private var bedtimeRow: some View {
-        Card(padding: 16) {
-            DatePicker(selection: bedtime, displayedComponents: .hourAndMinute) {
+        // At the largest text sizes the time goes under its label rather than squeezing it into a sliver.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout())
+        return Card(padding: 16) {
+            layout {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Usual bedtime").font(.system(size: 17, weight: .medium))
+                    Text("Usual bedtime").scaledFont(17, .medium)
                     Text("Wake around \(Format.clock(schedule.bedtime + schedule.totalMinutes))")
-                        .font(.system(size: 13))
+                        .scaledFont(13)
                         .foregroundStyle(Theme.secondary)
                 }
                 .accessibilityElement(children: .combine)
+                Spacer(minLength: 0)
+                DatePicker("Bedtime", selection: bedtime, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
             }
         }
     }
@@ -128,26 +140,36 @@ private struct PhaseRow: View {
     /// Nil when this is the only phase, which can't be removed.
     let onDelete: (() -> Void)?
     let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var badge: CGFloat = 40
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        // At the largest text sizes the timing moves under the mode instead of beside it.
+        let large = typeSize.isAccessibilitySize
+        let content = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 14))
         Button(action: action) {
             HStack(spacing: 14) {
-                Image(systemName: phase.mode.symbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(phase.mode.tint)
-                    .frame(width: 40, height: 40)
-                    .background(phase.mode.tint.opacity(0.16), in: Circle())
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(phase.mode.title).font(.system(size: 17, weight: .semibold))
-                    Text(detail).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                content {
+                    HStack(spacing: 14) {
+                        Image(systemName: phase.mode.symbol)
+                            .scaledFont(16, .semibold)
+                            .foregroundStyle(phase.mode.tint)
+                            .frame(width: min(badge, 56), height: min(badge, 56))
+                            .background(phase.mode.tint.opacity(0.16), in: Circle())
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(phase.mode.title).scaledFont(17, .semibold)
+                            Text(detail).scaledFont(13).foregroundStyle(Theme.secondary)
+                        }
+                    }
+                    if !large { Spacer() }
+                    VStack(alignment: large ? .leading : .trailing, spacing: 3) {
+                        Text(Format.duration(phase.minutes)).scaledFont(15, .medium)
+                        Text(Format.clock(startsAt)).scaledFont(13).foregroundStyle(Theme.secondary)
+                    }
+                    .monospacedDigit()
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(Format.duration(phase.minutes)).font(.system(size: 15, weight: .medium))
-                    Text(Format.clock(startsAt)).font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                }
-                .monospacedDigit()
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                if large { Spacer(minLength: 0) }
+                Image(systemName: "chevron.right").scaledFont(12, .semibold).foregroundStyle(Theme.tertiary)
             }
             .padding(14)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -175,13 +197,29 @@ private struct PhaseEditor: View {
     @Binding var phase: Phase
     let canDelete: Bool
     let onDelete: () -> Void
+    @State private var contentHeight: CGFloat = 450
 
     var body: some View {
+        // The sheet fits what's in it at any text size, scrolling once that's taller than the screen.
+        ScrollView {
+            content
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .presentationDetents([.height(contentHeight)])
+        .presentationBackground(Theme.surface)
+        .animation(.smooth(duration: 0.25), value: phase.mode)
+        .onChange(of: phase.maxMinutes, initial: true) { _, longest in
+            phase.minutes = min(phase.minutes, longest)
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 24) {
             HStack {
-                Text("Phase").font(.system(size: 22, weight: .bold)).accessibilityAddTraits(.isHeader)
+                Text("Phase").scaledFont(22, .bold).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("Done") { dismiss() }.font(.system(size: 17, weight: .semibold))
+                Button("Done") { dismiss() }.scaledFont(17, .semibold)
             }
             ModePicker(modes: model.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
@@ -198,7 +236,7 @@ private struct PhaseEditor: View {
             if isHeatLimited {
                 Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
                      + (model.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -206,19 +244,12 @@ private struct PhaseEditor: View {
                 Button("Remove Phase", role: .destructive) {
                     onDelete()
                 }
-                .font(.system(size: 17, weight: .medium))
-                .frame(maxWidth: .infinity)
+                .scaledFont(17, .medium)
+                .frame(maxWidth: .infinity, minHeight: 44)
             }
-            Spacer(minLength: 0)
         }
         .padding(24)
         .padding(.top, 8)
-        .presentationDetents([.height((model.adjustsTemperature(phase.mode) ? 530 : 450) + (isHeatLimited ? 50 : 0))])
-        .presentationBackground(Theme.surface)
-        .animation(.smooth(duration: 0.25), value: phase.mode)
-        .onChange(of: phase.maxMinutes, initial: true) { _, longest in
-            phase.minutes = min(phase.minutes, longest)
-        }
     }
 
     private var isHeatLimited: Bool { phase.maxMinutes < phase.mode.maxMinutes }
@@ -264,16 +295,22 @@ struct ModePicker: View {
     let selection: Mode?
     var hint: String?
     let onSelect: (Mode) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+        // Large text gets a column of full-width buttons with the icon beside the name.
+        let large = typeSize.isAccessibilitySize
+        let label = large ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 6))
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: large ? 1 : 3), spacing: 10) {
             ForEach(modes, id: \.self) { mode in
                 let isSelected = mode == selection
                 Button { onSelect(mode) } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: mode.symbol).font(.system(size: 18, weight: .semibold))
-                        Text(mode.title).font(.system(size: 13, weight: .semibold))
+                    label {
+                        Image(systemName: mode.symbol).scaledFont(18, .semibold)
+                        Text(mode.title).scaledFont(13, .semibold)
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 8)
                     .foregroundStyle(isSelected ? Color.black : mode.tint)
                     .frame(maxWidth: .infinity, minHeight: 62)
                     .background(isSelected ? mode.tint : Theme.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))

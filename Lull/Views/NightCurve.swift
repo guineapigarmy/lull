@@ -140,14 +140,23 @@ struct NightTimeline: View {
         VStack(spacing: 10) {
             NightCurve(phases: schedule.phases, progress: progress, selection: selection)
                 .frame(height: height)
-            HStack {
-                label(Format.clock(start), "moon.fill")
-                Spacer()
-                Text(Format.duration(schedule.totalMinutes))
-                Spacer()
-                label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+            // Bedtime, length and wake across one line, or stacked when large text won't fit.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    label(Format.clock(start), "moon.fill")
+                    Spacer()
+                    Text(Format.duration(schedule.totalMinutes))
+                    Spacer()
+                    label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    label(Format.clock(start), "moon.fill")
+                    label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+                    Text(Format.duration(schedule.totalMinutes))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.system(size: 13, weight: .medium))
+            .scaledFont(13, .medium)
             .foregroundStyle(Theme.secondary)
             .monospacedDigit()
         }
@@ -166,7 +175,7 @@ struct NightTimeline: View {
 
     private func label(_ text: String, _ symbol: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 10))
+            Image(systemName: symbol).scaledFont(10)
             Text(text)
         }
     }

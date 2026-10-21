@@ -12,9 +12,9 @@ struct HistoryView: View {
             if nights.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("No nights yet").font(.system(size: 22, weight: .semibold))
+                        Text("No nights yet").scaledFont(22, .semibold)
                         Text("Every change to your BedJet shows up here with the time and room temperature, so in the morning you can see what you picked overnight.")
-                            .font(.system(size: 15))
+                            .scaledFont(15)
                             .foregroundStyle(Theme.secondary)
                     }
                 }
@@ -36,24 +36,27 @@ private struct NightRow: View {
     let night: Night
     let isExpanded: Bool
     let toggle: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        // At the largest text sizes the curve moves under the text so the date and schedule keep the width.
+        let large = typeSize.isAccessibilitySize
         Card(padding: 18) {
             VStack(alignment: .leading, spacing: 20) {
                 Button(action: toggle) {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
+                            Text(title).scaledFont(19, .semibold)
                             Text(summary(through: "–"))
-                                .font(.system(size: 13, weight: .medium))
+                                .scaledFont(13, .medium)
                                 .foregroundStyle(Theme.secondary)
                                 .monospacedDigit()
-                                .lineLimit(1)
+                            if large { NightCurve(phases: night.phases, lineWidth: 2).frame(height: 40).padding(.top, 6) }
                         }
                         Spacer(minLength: 8)
-                        NightCurve(phases: night.phases, lineWidth: 2).frame(width: 88, height: 40)
+                        if !large { NightCurve(phases: night.phases, lineWidth: 2).frame(width: 88, height: 40) }
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(13, .semibold)
                             .foregroundStyle(Theme.tertiary)
                             .rotationEffect(.degrees(isExpanded ? 180 : 0))
                     }
@@ -95,20 +98,24 @@ private struct EntryRow: View {
     @Environment(AppModel.self) private var model
     let entry: HistoryEntry
     let isLast: Bool
+    @ScaledMetric(relativeTo: .footnote) private var badge: CGFloat = 28
+    @ScaledMetric(relativeTo: .footnote) private var timeWidth: CGFloat = 64
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        // At the largest text sizes the time sits above what happened instead of in its own column.
+        let large = typeSize.isAccessibilitySize
         HStack(alignment: .top, spacing: 12) {
-            Text(entry.date.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 13, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 64, alignment: .trailing)
-                .padding(.top, 6)
+            if !large {
+                time
+                    .frame(width: timeWidth, alignment: .trailing)
+                    .padding(.top, 6)
+            }
             VStack(spacing: 0) {
                 Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(12, .semibold)
                     .foregroundStyle(tint)
-                    .frame(width: 28, height: 28)
+                    .frame(width: badge, height: badge)
                     .background(tint.opacity(0.16), in: Circle())
                     .accessibilityHidden(true)
                 // Joins the entries into one line through the night.
@@ -117,9 +124,10 @@ private struct EntryRow: View {
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(title(spoken: false)).font(.system(size: 16, weight: .semibold)).accessibilityLabel(title(spoken: true))
+                if large { time }
+                Text(title(spoken: false)).scaledFont(16, .semibold).accessibilityLabel(title(spoken: true))
                 if let detail = detail(spoken: false) {
-                    Text(detail).font(.system(size: 13)).foregroundStyle(Theme.secondary).accessibilityLabel(self.detail(spoken: true) ?? detail)
+                    Text(detail).scaledFont(13).foregroundStyle(Theme.secondary).accessibilityLabel(self.detail(spoken: true) ?? detail)
                 }
             }
             .padding(.top, 4)
@@ -127,6 +135,13 @@ private struct EntryRow: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var time: some View {
+        Text(entry.date.formatted(date: .omitted, time: .shortened))
+            .scaledFont(13, .medium)
+            .monospacedDigit()
+            .foregroundStyle(Theme.secondary)
     }
 
     /// Parts are joined with a dot on screen; VoiceOver gets commas and durations in words.

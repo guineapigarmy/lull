@@ -21,6 +21,13 @@ final class LullUITests: XCTestCase {
         }
     }
 
+    /// Drags a slider's thumb from one point on its track to another, as fractions of the width.
+    /// VoiceOver sees the slider and its title row as one element, so the track runs along the bottom of it.
+    private func slide(_ slider: XCUIElement, from: CGFloat, to: CGFloat) {
+        let start = slider.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0.78))
+        start.press(forDuration: 0.2, thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.78)))
+    }
+
     func testOpensOnRemote() {
         XCTAssertTrue(app.staticTexts["Remote"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.tabBars.buttons.firstMatch.label, "Remote")
@@ -159,10 +166,11 @@ final class LullUITests: XCTestCase {
         waitForExpectations(timeout: 5)
 
         // A shorter time picked by hand sticks, and survives a fan change.
-        timer.adjust(toNormalizedSliderPosition: 0)
+        slide(timer, from: 0.97, to: 0)
         sleep(3)
         XCTAssertEqual(timer.value as? String, "5 minutes")
-        app.sliders["Fan"].adjust(toNormalizedSliderPosition: 0.8)
+        // Fan starts at 40%, a third of the way along.
+        slide(app.sliders["Fan"], from: 0.37, to: 0.8)
         sleep(3)
         XCTAssertEqual(timer.value as? String, "5 minutes")
 

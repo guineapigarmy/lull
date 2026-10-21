@@ -63,18 +63,21 @@ struct Screen<Content: View>: View {
     var subtitle: String?
     @ViewBuilder var content: Content
     @State private var showsDevice = false
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        // At the largest text sizes the title takes the full width and the connection sits beneath it.
+        let header = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .top))
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top) {
+                header {
                     VStack(alignment: .leading, spacing: 4) {
                         if let subtitle { Eyebrow(subtitle) }
                         Text(title)
-                            .font(.system(size: 34, weight: .bold))
+                            .scaledFont(34, .bold)
                             .accessibilityAddTraits(.isHeader)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                     ConnectionPill { showsDevice = true }
                 }
                 .padding(.top, 8)
@@ -100,10 +103,11 @@ struct ConnectionPill: View {
                     .fill(model.isConnected ? Color.green : Theme.neutral)
                     .frame(width: 8, height: 8)
                     .symbolEffect(.pulse, isActive: !model.isConnected)
-                Text(label).font(.system(size: 13, weight: .semibold))
+                Text(label).scaledFont(13, .semibold)
             }
             .padding(.horizontal, 14)
-            .frame(height: 36)
+            .padding(.vertical, 6)
+            .frame(minHeight: 36)
             .background(Theme.raised, in: Capsule())
             .overlay(Capsule().strokeBorder(Theme.hairline))
         }

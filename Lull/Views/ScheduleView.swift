@@ -5,6 +5,7 @@ import SwiftUI
 struct ScheduleView: View {
     @Environment(AppModel.self) private var model
     @State private var editing: Schedule?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Screen(title: "Schedule", subtitle: Date().formatted(.dateTime.weekday(.wide).month().day())) {
@@ -19,8 +20,8 @@ struct ScheduleView: View {
             } else {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("No schedules yet").font(.system(size: 22, weight: .semibold))
-                        Text("Create one to plan how your night feels.").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                        Text("No schedules yet").scaledFont(22, .semibold)
+                        Text("Create one to plan how your night feels.").scaledFont(15).foregroundStyle(Theme.secondary)
                     }
                 }
             }
@@ -52,13 +53,13 @@ struct ScheduleView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Eyebrow("Tonight")
-                        Text(schedule.name).font(.system(size: 26, weight: .semibold))
+                        Text(schedule.name).scaledFont(26, .semibold)
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button("Edit") { editing = schedule }
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(15, .semibold)
                         .foregroundStyle(Theme.secondary)
                         // A full-size target without moving the text.
                         .padding(12)
@@ -79,7 +80,7 @@ struct ScheduleView: View {
                 .disabled(!model.canControl || model.isBusy)
 
                 Text(startHint)
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.tertiary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
@@ -102,16 +103,16 @@ struct ScheduleView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Eyebrow("Running now")
-                    Text("Phase \(step)").font(.system(size: 26, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                    Text("Phase \(step)").scaledFont(26, .semibold).accessibilityAddTraits(.isHeader)
                     if let status = model.status {
                         let minutes = max((status.remainingSeconds + 59) / 60, 1)
                         Label("\(status.mode.activity) · \(Format.duration(minutes)) left in this phase", systemImage: status.mode.symbol)
-                            .font(.system(size: 15, weight: .medium))
+                            .scaledFont(15, .medium)
                             .foregroundStyle(status.mode.tint)
                             .accessibilityLabel("\(status.mode.activity), \(Format.spokenDuration(minutes)) left in this phase")
                     }
                     Text("This schedule was started from another phone or the BedJet's own remote.")
-                        .font(.system(size: 13))
+                        .scaledFont(13)
                         .foregroundStyle(Theme.tertiary)
                 }
                 Button("End Night") { Task { await model.endNight() } }
@@ -127,10 +128,10 @@ struct ScheduleView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Eyebrow(current.map { "Phase \($0.index + 1) of \(run.schedule.phases.count)" } ?? "Finishing")
-                    Text(run.schedule.name).font(.system(size: 26, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                    Text(run.schedule.name).scaledFont(26, .semibold).accessibilityAddTraits(.isHeader)
                     if let current {
                         Label("\(current.phase.mode.activity) · \(Format.duration(current.minutesLeft)) left", systemImage: current.phase.mode.symbol)
-                            .font(.system(size: 15, weight: .medium))
+                            .scaledFont(15, .medium)
                             .foregroundStyle(current.phase.mode.tint)
                             .accessibilityLabel("\(current.phase.mode.activity), \(Format.spokenDuration(current.minutesLeft)) left")
                     }
@@ -144,30 +145,38 @@ struct ScheduleView: View {
     }
 
     private func row(_ schedule: Schedule) -> some View {
-        Button { editing = schedule } label: { ScheduleRow(schedule: schedule) }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(schedule.name), \(Format.spokenDuration(schedule.totalMinutes)), \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
-            .accessibilityHint("Edits this schedule")
-            .accessibilityActions { moreActions(schedule) }
-            .overlay(alignment: .topTrailing) {
-                // Swapping schedules waits until the one that is running has ended.
-                if model.run == nil {
-                    Button { model.tonightID = schedule.id } label: {
-                        Text("Use Tonight")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 14)
-                            .frame(height: 32)
-                            .background(Theme.raised, in: Capsule())
-                            .overlay(Capsule().strokeBorder(Theme.hairline))
-                            .padding(10)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(4)
-                    .accessibilityLabel("Use \(schedule.name) tonight")
+        // Swapping schedules waits until the one that is running has ended.
+        let canSwap = model.run == nil
+        // At the largest text sizes Use Tonight goes under the card rather than over its corner.
+        let beneath = typeSize.isAccessibilitySize
+        return VStack(alignment: .trailing, spacing: 8) {
+            Button { editing = schedule } label: { ScheduleRow(schedule: schedule, reservesCorner: canSwap && !beneath) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(schedule.name), \(Format.spokenDuration(schedule.totalMinutes)), \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
+                .accessibilityHint("Edits this schedule")
+                .accessibilityActions { moreActions(schedule) }
+                .overlay(alignment: .topTrailing) {
+                    if canSwap && !beneath { useTonight(schedule).padding(4) }
                 }
-            }
-            .contextMenu { menu(schedule) }
+                .contextMenu { menu(schedule) }
+            if canSwap && beneath { useTonight(schedule) }
+        }
+    }
+
+    private func useTonight(_ schedule: Schedule) -> some View {
+        Button { model.tonightID = schedule.id } label: {
+            Text("Use Tonight")
+                .scaledFont(13, .semibold)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(minHeight: 32)
+                .background(Theme.raised, in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.hairline))
+                .padding(10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Use \(schedule.name) tonight")
     }
 
     @ViewBuilder
@@ -196,18 +205,19 @@ struct ScheduleView: View {
 
 private struct ScheduleRow: View {
     let schedule: Schedule
+    /// Leaves room for the Use Tonight button laid over the top corner.
+    var reservesCorner = true
+    @ScaledMetric(relativeTo: .footnote) private var corner: CGFloat = 116
 
     var body: some View {
         Card(padding: 18) {
             VStack(alignment: .leading, spacing: 14) {
                 Text(schedule.name)
-                    .font(.system(size: 19, weight: .semibold))
-                    .lineLimit(1)
-                    // Leaves room for the Use Tonight button laid over this corner.
-                    .padding(.trailing, 116)
+                    .scaledFont(19, .semibold)
+                    .padding(.trailing, reservesCorner ? corner : 0)
                 NightCurve(phases: schedule.phases, lineWidth: 2.5).frame(height: 64)
                 Text("\(Format.duration(schedule.totalMinutes)) · \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(13, .medium)
                     .foregroundStyle(Theme.secondary)
             }
         }

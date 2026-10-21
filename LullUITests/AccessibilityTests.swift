@@ -49,8 +49,8 @@ final class AccessibilityTests: XCTestCase {
         if bottomBar.exists && bottomBar.isHittable { bottom = min(bottom, bottomBar.frame.minY - 12) }
 
         try app.performAccessibilityAudit(for: checks) { issue in
-            // A partial sheet leaves the editor beneath it visible but out of VoiceOver's reach, as a modal sheet should.
-            // At the largest text size the same sheet fills the screen and this goes away.
+            // A partial sheet leaves the editor beneath it on view but out of VoiceOver's reach, as a modal sheet should
+            // (LullTests/VoiceOverTests checks that it is). At the largest text size the sheet fills the screen and this goes away.
             if overSheet && issue.auditType == .elementDetection { return true }
             if let element = issue.element {
                 let frame = element.frame

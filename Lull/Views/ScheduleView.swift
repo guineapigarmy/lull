@@ -66,7 +66,9 @@ struct ScheduleView: View {
                         .contentShape(Rectangle())
                         .padding(-12)
                         .accessibilityLabel("Edit \(schedule.name)")
-                        .accessibilityActions { moreActions(schedule) }
+                        // VoiceOver lists the last action added first, so this puts Duplicate ahead of Delete.
+                        .accessibilityAction(named: "Delete") { model.delete(schedule) }
+                        .accessibilityAction(named: "Duplicate") { duplicate(schedule) }
                 }
                 NightTimeline(schedule: schedule, startMinute: minuteOfDay(Date()))
                 Button {
@@ -154,7 +156,8 @@ struct ScheduleView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(schedule.name), \(Format.spokenDuration(schedule.totalMinutes)), \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
                 .accessibilityHint("Edits this schedule")
-                .accessibilityActions { moreActions(schedule) }
+                .accessibilityAction(named: "Delete") { model.delete(schedule) }
+                .accessibilityAction(named: "Duplicate") { duplicate(schedule) }
                 .overlay(alignment: .topTrailing) {
                     if canSwap && !beneath { useTonight(schedule).padding(4) }
                 }
@@ -182,19 +185,15 @@ struct ScheduleView: View {
     @ViewBuilder
     private func menu(_ schedule: Schedule) -> some View {
         Button("Edit", systemImage: "slider.horizontal.3") { editing = schedule }
-        moreActions(schedule)
+        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(schedule) }
+        Button("Delete", systemImage: "trash", role: .destructive) { model.delete(schedule) }
     }
 
-    /// The menu's other choices, also offered to VoiceOver as actions on the schedule.
-    @ViewBuilder
-    private func moreActions(_ schedule: Schedule) -> some View {
-        Button("Duplicate", systemImage: "plus.square.on.square") {
-            var copy = schedule
-            copy.id = UUID()
-            copy.name = Codec.sanitize("\(schedule.name) copy")
-            model.save(copy)
-        }
-        Button("Delete", systemImage: "trash", role: .destructive) { model.delete(schedule) }
+    private func duplicate(_ schedule: Schedule) {
+        var copy = schedule
+        copy.id = UUID()
+        copy.name = Codec.sanitize("\(schedule.name) copy")
+        model.save(copy)
     }
 
     private func minuteOfDay(_ date: Date) -> Int {

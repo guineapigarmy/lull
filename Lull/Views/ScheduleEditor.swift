@@ -206,6 +206,8 @@ private struct PhaseEditor: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
+        // A sheet shorter than the screen doesn't hold VoiceOver by itself; this keeps it off the editor beneath.
+        .accessibilityAddTraits(.isModal)
         .presentationDetents([.height(contentHeight)])
         .presentationBackground(Theme.surface)
         .animation(.smooth(duration: 0.25), value: phase.mode)

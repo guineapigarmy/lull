@@ -18,11 +18,19 @@
 			remoteGlobalIDString = A10000000000000000000006;
 			remoteInfo = Lull;
 		};
+		C10000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000006;
+			remoteInfo = Lull;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000001 /* Lull.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lull.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000001 /* LullUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000001 /* LullTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +42,11 @@
 		B10000000000000000000003 /* LullUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = LullUITests;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000003 /* LullTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LullTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -56,6 +69,7 @@
 				A10000000000000000000002 /* Lull */,
 				A10000000000000000000005 /* Products */,
 				B10000000000000000000003 /* LullUITests */,
+				C10000000000000000000003 /* LullTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -64,6 +78,7 @@
 			children = (
 				A10000000000000000000001 /* Lull.app */,
 				B10000000000000000000001 /* LullUITests.xctest */,
+				C10000000000000000000001 /* LullTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -113,6 +128,25 @@
 			productReference = B10000000000000000000001 /* LullUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		C10000000000000000000004 /* LullTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C10000000000000000000008 /* Build configuration list for PBXNativeTarget "LullTests" */;
+			buildPhases = (
+				C10000000000000000000005 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C10000000000000000000006 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C10000000000000000000003 /* LullTests */,
+			);
+			name = LullTests;
+			productName = LullTests;
+			productReference = C10000000000000000000001 /* LullTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -127,6 +161,10 @@
 						CreatedOnToolsVersion = 26.2;
 					};
 					B10000000000000000000004 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = A10000000000000000000006;
+					};
+					C10000000000000000000004 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = A10000000000000000000006;
 					};
@@ -151,6 +189,7 @@
 			targets = (
 				A10000000000000000000006 /* Lull */,
 				B10000000000000000000004 /* LullUITests */,
+				C10000000000000000000004 /* LullTests */,
 			);
 		};
 /* End PBXProject section */
@@ -180,6 +219,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -187,6 +233,11 @@
 			isa = PBXTargetDependency;
 			target = A10000000000000000000006 /* Lull */;
 			targetProxy = B10000000000000000000002 /* PBXContainerItemProxy */;
+		};
+		C10000000000000000000006 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000006 /* Lull */;
+			targetProxy = C10000000000000000000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -323,6 +374,40 @@
 			};
 			name = Release;
 		};
+		C10000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lull.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lull";
+			};
+			name = Debug;
+		};
+		C1000000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lull.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lull";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -349,6 +434,15 @@
 			buildConfigurations = (
 				B10000000000000000000009 /* Debug */,
 				B1000000000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C10000000000000000000008 /* Build configuration list for PBXNativeTarget "LullTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C10000000000000000000009 /* Debug */,
+				C1000000000000000000000A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

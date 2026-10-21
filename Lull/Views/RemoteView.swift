@@ -26,7 +26,7 @@ struct RemoteView: View {
                     .frame(maxWidth: .infinity)
             }
 
-            ModePicker(modes: Mode.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
+            ModePicker(modes: model.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
                 chosenMode = mode
                 Task {
                     await model.setMode(mode)
@@ -37,7 +37,7 @@ struct RemoteView: View {
             if let status, status.isRunning {
                 Card(padding: 18) {
                     VStack(spacing: 16) {
-                        if mode.usesTemperature {
+                        if model.adjustsTemperature(mode) {
                             TemperatureSlider(mode: mode, temperature: sending($temperature, "temperature") {
                                 await model.setTemperature(temperature)
                             }, limits: status.minTemperature < status.maxTemperature ? status.minTemperature...status.maxTemperature : nil)
@@ -134,7 +134,7 @@ struct ClimateOrb: View {
             VStack(spacing: 4) {
                 if let status {
                     Eyebrow(mode.activity)
-                    Text(isOn && mode.usesTemperature ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
+                    Text(isOn && model.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
                         .font(.system(size: 60, weight: .thin))
                         .monospacedDigit()
                         .contentTransition(.numericText())

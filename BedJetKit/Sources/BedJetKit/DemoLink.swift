@@ -12,6 +12,7 @@ public final class DemoLink: BedJetLink {
 
     public private(set) var slots: [StoredProgram?]
     public private(set) var clock: (hour: Int, minute: Int)?
+    public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
 
     private var status = DeviceStatus(
         remainingSeconds: 0, actualTemperature: 46, targetTemperature: 60, mode: .standby, fanStep: 7,

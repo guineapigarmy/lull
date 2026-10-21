@@ -12,6 +12,17 @@ public enum Codec {
         public static func fragment(slot: Int, index: Int) -> UInt8 { UInt8(7 + slot * 4 + index) }
     }
 
+    /// Codes the unit raises in byte 29 of its status.
+    public enum Notification {
+        public static let cleanFilter = 1
+        public static let updateAvailable = 2
+        public static let updateFailed = 3
+        /// A program was started but the unit's clock isn't set, so it didn't run.
+        public static let programNeedsClock = 4
+        /// A program was started with a step longer than the unit allows, so it didn't run.
+        public static let programTooLong = 5
+    }
+
     // MARK: Commands
 
     public static func setMode(_ mode: Mode) -> Data? { mode.button.map { Data([0x01, $0]) } }
@@ -23,6 +34,7 @@ public enum Codec {
     public static func setMuted(_ muted: Bool) -> Data { Data([0x01, muted ? 0x48 : 0x49]) }
     public static func startProgram(slot: Int) -> Data { Data([0x01, UInt8(0x80 + slot)]) }
     public static func deleteProgram(slot: Int) -> Data { Data([0x01, UInt8(0x83 + slot)]) }
+    public static let acknowledgeNotification = Data([0x01, 0x52])
     public static func query(_ request: UInt8, tag: UInt8) -> Data { Data([0x41, request, tag]) }
 
     public static func nameProgram(slot: Int, name: String) -> Data {
@@ -119,6 +131,7 @@ public enum Codec {
             minTemperature: Int(b[13]),
             maxTemperature: Int(b[14]),
             ambientTemperature: Int(b[17]),
+            lastShutdownReason: Int(b[18]),
             extra: nil
         )
         if b.count >= 30 {

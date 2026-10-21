@@ -141,7 +141,15 @@ final class AppModel {
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
         let programStopped = status.mode == .standby && status.extra?.programStep == 0
-        if Date() >= run.endsAt || (settled && programStopped) { self.run = nil }
+        guard Date() >= run.endsAt || (settled && programStopped) else { return }
+        self.run = nil
+        // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
+        // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
+        let minutesEarly = Int(run.endsAt.timeIntervalSinceNow / 60)
+        if !isBusy, minutesEarly > 2 {
+            errorMessage = "Your BedJet turned off \(Format.duration(minutesEarly)) before tonight's schedule ended "
+                + "(BedJet reason \(status.lastShutdownReason))."
+        }
     }
 
     private func refreshSlots() async throws {
@@ -170,12 +178,32 @@ final class AppModel {
             self.slot = slot
             try await link.store(schedule.program, slot: slot)
             try await link.startProgram(slot: slot)
+            try await self.confirmStarted()
             self.run = ActiveRun(schedule: schedule, startedAt: Date())
             if let demo = link as? DemoLink, Self.demoElapsedMinutes > 0 {
                 demo.skipAhead(minutes: Self.demoElapsedMinutes)
                 self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-Self.demoElapsedMinutes * 60))
             }
             try? await self.refreshSlots()
+        }
+    }
+
+    /// A BedJet that can't run a schedule stays off and raises a notification instead of starting it.
+    private func confirmStarted() async throws {
+        guard let link else { return }
+        for _ in 0..<20 {
+            try await Task.sleep(nanoseconds: 200_000_000)
+            guard let extra = status?.extra else { continue }
+            if extra.programStep > 0 { return }
+            let refusal: BedJetError? = switch extra.notification {
+            case Codec.Notification.programNeedsClock: .clockNotSet
+            case Codec.Notification.programTooLong: .programTooLong
+            default: nil
+            }
+            if let refusal {
+                try? await link.send(Codec.acknowledgeNotification)
+                throw refusal
+            }
         }
     }
 
@@ -229,7 +257,8 @@ final class AppModel {
     /// Air started from the Remote runs for as long as the BedJet allows, until a shorter time is
     /// picked there. Schedules keep their own timing.
     private func extendRuntime(entering mode: Mode? = nil) async throws {
-        guard keepsLongestRuntime, run == nil, let link else { return }
+        // A schedule started from another phone times its own phases; leave its timer alone.
+        guard keepsLongestRuntime, run == nil, runningElsewhereStep == nil, let link else { return }
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
         // the mode changes, so wait for it to report the new state before reading the limit.
         try await Task.sleep(nanoseconds: 600_000_000)

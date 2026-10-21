@@ -15,7 +15,7 @@ public final class DemoLink: BedJetLink {
 
     private var status = DeviceStatus(
         remainingSeconds: 0, actualTemperature: 46, targetTemperature: 60, mode: .standby, fanStep: 7,
-        maxRuntimeMinutes: 0, minTemperature: 38, maxTemperature: 80, ambientTemperature: 45,
+        maxRuntimeMinutes: 0, minTemperature: 38, maxTemperature: 80, ambientTemperature: 45, lastShutdownReason: 0,
         extra: .init(ledEnabled: true, beepsMuted: false, programStep: 0, notification: 0)
     )
     private var running: (slot: Int, step: Int, stepEnds: Date)?
@@ -47,8 +47,12 @@ public final class DemoLink: BedJetLink {
         case 0x01: press(bytes[1])
         case 0x02 where bytes.count >= 3:
             status.remainingSeconds = min(Int(bytes[1]) * 60 + Int(bytes[2]), status.maxRuntimeMinutes) * 60
-        case 0x03: status.targetTemperature = Int(bytes[1])
-        case 0x07: status.fanStep = Int(bytes[1])
+        case 0x03:
+            status.targetTemperature = Int(bytes[1])
+            limitHeat()
+        case 0x07:
+            status.fanStep = Int(bytes[1])
+            limitHeat()
         case 0x08 where bytes.count >= 3: clock = (Int(bytes[1]), Int(bytes[2]))
         case 0x40: store(bytes)
         default: break
@@ -92,11 +96,22 @@ public final class DemoLink: BedJetLink {
             enter(mode, minutes: mode == .standby ? 0 : mode == .turbo ? 10 : 60)
             // Manual modes start at an hour and can be stretched; these ceilings are illustrative.
             status.maxRuntimeMinutes = mode == .standby ? 0 : mode == .turbo ? 10 : mode == .heat ? 240 : 720
+            limitHeat()
         case 0x46, 0x47: status.extra?.ledEnabled = button == 0x46
         case 0x48, 0x49: status.extra?.beepsMuted = button == 0x48
+        case 0x52: status.extra?.notification = 0
         case 0x80...0x82:
             let slot = Int(button - 0x80)
-            guard slots[slot] != nil else { return }
+            guard let program = slots[slot] else { return }
+            // Like the real unit, refuse to start rather than stop partway through the night.
+            if clock == nil {
+                status.extra?.notification = Codec.Notification.programNeedsClock
+                return
+            }
+            if !program.steps.allSatisfy(\.fitsUnitLimits) {
+                status.extra?.notification = Codec.Notification.programTooLong
+                return
+            }
             running = (slot, -1, Date())
             advanceProgram(from: Date())
         case 0x83...0x85:
@@ -115,6 +130,14 @@ public final class DemoLink: BedJetLink {
         if !mode.temperatureRange.contains(status.targetTemperature) {
             status.targetTemperature = mode.temperatureRange.lowerBound
         }
+    }
+
+    /// Hot air at a high fan is cut off sooner, so manual Heat's ceiling follows temperature and fan.
+    private func limitHeat() {
+        guard status.mode == .heat, running == nil else { return }
+        let longest = ProgramStep.longestMinutes(mode: .heat, temperature: status.targetTemperature, fanStep: status.fanStep)
+        status.maxRuntimeMinutes = min(240, longest)
+        status.remainingSeconds = min(status.remainingSeconds, status.maxRuntimeMinutes * 60)
     }
 
     private func store(_ bytes: [UInt8]) {

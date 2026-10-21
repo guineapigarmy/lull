@@ -172,7 +172,6 @@ private struct PhaseEditor: View {
             ModePicker(modes: Mode.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
                 if !mode.temperatureRange.contains(phase.temperature) { phase.temperature = mode.defaultTemperature }
-                phase.minutes = min(phase.minutes, mode.maxMinutes)
             }
             if phase.mode.usesTemperature {
                 TemperatureSlider(mode: phase.mode, temperature: $phase.temperature)
@@ -181,7 +180,13 @@ private struct PhaseEditor: View {
                 LabeledSlider(title: "Fan", valueText: "\(phase.fanPercent)%", value: fan, range: 5...100, step: 5, tint: phase.mode.tint)
             }
             LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), value: minutes,
-                          range: 5...Double(phase.mode.maxMinutes / 5 * 5), step: 5, tint: .white)
+                          range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
+            if isHeatLimited {
+                Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off. Use Gentle heat to run longer.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if canDelete {
                 Button("Remove Phase", role: .destructive) {
                     onDelete()
@@ -193,10 +198,15 @@ private struct PhaseEditor: View {
         }
         .padding(24)
         .padding(.top, 8)
-        .presentationDetents([.height(phase.mode.usesTemperature ? 530 : 450)])
+        .presentationDetents([.height((phase.mode.usesTemperature ? 530 : 450) + (isHeatLimited ? 50 : 0))])
         .presentationBackground(Theme.surface)
         .animation(.smooth(duration: 0.25), value: phase.mode)
+        .onChange(of: phase.maxMinutes, initial: true) { _, longest in
+            phase.minutes = min(phase.minutes, longest)
+        }
     }
+
+    private var isHeatLimited: Bool { phase.maxMinutes < phase.mode.maxMinutes }
 
     private var fan: Binding<Double> {
         Binding { Double(phase.fanPercent) } set: { phase.fanPercent = Int($0) }

@@ -61,6 +61,46 @@ public struct ProgramStep: Codable, Hashable, Sendable {
     }
 }
 
+extension ProgramStep {
+    /// Longest the unit lets a step run, in minutes. Heat is cut off sooner the hotter and faster the air,
+    /// following the table the official app enforces; the unit refuses or stops a step that runs past it.
+    public static func longestMinutes(mode: Mode, temperature: Int, fanStep: Int) -> Int {
+        guard mode == .heat, temperature >= 60 else { return Limits.maxStepMinutes }
+        let row = heatHours[min(max(fanStep, 0), heatHours.count - 1)]
+        let offset = temperature - 60
+        let pair = row[min(offset >> 1, row.count - 1)]
+        let hours = Int(offset & 1 == 0 ? pair >> 4 : pair & 0x0f)
+        return min(hours * 60, Limits.maxStepMinutes)
+    }
+
+    public var longestMinutes: Int {
+        Self.longestMinutes(mode: mode, temperature: temperature, fanStep: fanStep)
+    }
+
+    /// False when the unit would stop this step before it finishes. Clock-time steps end when they say.
+    public var fitsUnitLimits: Bool {
+        endsAtClockTime || hours * 60 + minutes <= longestMinutes
+    }
+
+    /// Heat hours allowed by fan step (rows) and target from 30 °C up in half-degree pairs (columns).
+    /// Each byte holds two temperatures: the even half-degree in the high nibble, the odd one in the low.
+    private static let heatHours: [[UInt8]] = {
+        let quiet: [UInt8] = [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc6, 0x66, 0x66, 0x41]
+        let strong: [UInt8] = [0xcc, 0xcc, 0xcc, 0xcc, 0x44, 0x44, 0x44, 0x42, 0x21, 0x11, 0x11]
+        return Array(repeating: quiet, count: 5) + [
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc6, 0x66, 0x64, 0x44, 0x21],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc6, 0x64, 0x44, 0x44, 0x21],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc6, 0x64, 0x42, 0x22, 0x21],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc4, 0x44, 0x42, 0x22, 0x21],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc4, 0x44, 0x42, 0x11, 0x11],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xc4, 0x44, 0x44, 0x42, 0x11, 0x11],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x44, 0x44, 0x42, 0x21, 0x11, 0x11],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xc4, 0x44, 0x44, 0x42, 0x21, 0x11, 0x11],
+            [0xcc, 0xcc, 0xcc, 0xcc, 0xc4, 0x44, 0x44, 0x42, 0x21, 0x11, 0x11],
+        ] + Array(repeating: strong, count: 6)
+    }()
+}
+
 /// A program stored in one of the unit's three slots.
 public struct StoredProgram: Equatable, Sendable {
     public var name: String
@@ -82,6 +122,8 @@ public struct DeviceStatus: Equatable, Sendable {
     public var minTemperature: Int
     public var maxTemperature: Int
     public var ambientTemperature: Int
+    /// Why the unit last turned itself off. The codes are undocumented; reported for diagnosis.
+    public var lastShutdownReason: Int
     /// The second half of the status packet arrives separately and may lag the first.
     public var extra: Extra?
 
@@ -90,6 +132,7 @@ public struct DeviceStatus: Equatable, Sendable {
         public var beepsMuted: Bool
         /// Non-zero while an on-device program is running.
         public var programStep: Int
+        /// One of `Codec.Notification`. The unit repeats it until it is acknowledged.
         public var notification: Int
     }
 
@@ -127,6 +170,8 @@ public enum BedJetError: LocalizedError, Equatable {
     case timeout
     case badResponse
     case verifyFailed
+    case clockNotSet
+    case programTooLong
     case invalidProgram(String)
 
     public var errorDescription: String? {
@@ -136,6 +181,8 @@ public enum BedJetError: LocalizedError, Equatable {
         case .timeout: return "Your BedJet didn't respond. Move closer and try again."
         case .badResponse: return "Your BedJet sent something unexpected. Try again."
         case .verifyFailed: return "The schedule didn't save correctly. Try again."
+        case .clockNotSet: return "Your BedJet's clock wasn't set, so it didn't start the schedule. Try again."
+        case .programTooLong: return "Your BedJet won't run a phase this long. Shorten the Heat phases or use Gentle heat."
         case .invalidProgram(let why): return why
         }
     }

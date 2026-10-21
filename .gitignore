@@ -3,3 +3,10 @@ xcuserdata/
 build/
 .build/
 *.xcresult
+.swiftpm/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.p12
+*.mobileprovision
+.env

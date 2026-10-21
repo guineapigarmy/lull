@@ -162,7 +162,8 @@ fun Screen(model: AppModel, title: String, subtitle: String? = null, content: @C
 
 @Composable
 fun ConnectionPill(model: AppModel, onClick: () -> Unit) {
-    val label = when (model.linkState) {
+    // "Not found" invites a tap through to the things worth checking.
+    val label = if (model.isSlowToFind) "Not found" else when (model.linkState) {
         LinkState.READY -> if (model.demoMode && !model.options.labelsDemoAsConnected) "Demo" else "Connected"
         LinkState.CONNECTING -> "Connecting"
         LinkState.SEARCHING -> "Searching"

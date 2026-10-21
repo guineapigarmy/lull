@@ -69,7 +69,6 @@ import com.rohankanjani.lull.bedjetkit.Limits
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.defaultTemperature
 import com.rohankanjani.lull.maxMinutes
-import com.rohankanjani.lull.phaseModes
 import com.rohankanjani.lull.title
 
 @Composable
@@ -234,7 +233,7 @@ private fun BedtimePicker(minuteOfDay: Int, onPick: (Int) -> Unit, onDismiss: ()
 @Composable
 private fun PhaseRow(model: AppModel, phase: Phase, startsAt: Int, onClick: () -> Unit) {
     val detail = buildList {
-        if (phase.mode.usesTemperature) add(model.degrees(phase.temperature))
+        if (model.adjustsTemperature(phase.mode)) add(model.degrees(phase.temperature))
         if (phase.mode.usesFan) add("Fan ${phase.fanPercent}%")
     }.ifEmpty { listOf("Air off") }.joinToString(" · ")
     val shape = RoundedCornerShape(22.dp)
@@ -292,7 +291,7 @@ private fun PhaseEditor(
                 Spacer(Modifier.weight(1f))
                 TextButton(onDismiss) { Text("Done", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White) }
             }
-            ModePicker(phaseModes, phase.mode) { mode ->
+            ModePicker(model.phaseModes, phase.mode) { mode ->
                 onChange(
                     phase.copy(
                         mode = mode,
@@ -300,7 +299,7 @@ private fun PhaseEditor(
                     ),
                 )
             }
-            if (phase.mode.usesTemperature) {
+            if (model.adjustsTemperature(phase.mode)) {
                 TemperatureSlider(model, phase.mode, phase.temperature, onChange = { onChange(phase.copy(temperature = it)) })
             }
             if (phase.mode.usesFan) {
@@ -317,7 +316,8 @@ private fun PhaseEditor(
             )
             if (isHeatLimited) {
                 Text(
-                    "At this temperature and fan, BedJet heats for up to ${Format.duration(phase.maxMinutes)} before its safety cut-off. Use Gentle heat to run longer.",
+                    "At this temperature and fan, BedJet heats for up to ${Format.duration(phase.maxMinutes)} before its safety cut-off." +
+                        if (model.generation.supports(Mode.EXTENDED_HEAT)) " Use Gentle heat to run longer." else "",
                     fontSize = 13.sp, color = Theme.secondary,
                 )
             }

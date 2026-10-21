@@ -15,7 +15,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bed
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
@@ -31,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -55,7 +63,7 @@ fun DeviceSheet(model: AppModel, onDismiss: () -> Unit) {
     val help = when (model.linkState) {
         LinkState.READY -> if (model.demoMode) "Demo mode uses a pretend BedJet so you can explore the app."
         else "Everything stays between this phone and your BedJet. No account, no cloud."
-        LinkState.CONNECTING, LinkState.SEARCHING -> "Stand near your BedJet and close the official BedJet app. The BedJet talks to one phone " +
+        LinkState.CONNECTING, LinkState.SEARCHING -> "Stand near your BedJet and force-quit the official BedJet app. The BedJet talks to one phone " +
             "at a time; phones with Lull hand it over to each other automatically."
         LinkState.YIELDED -> "The BedJet talks to one phone at a time, and another phone with Lull asked for it. Use any control here to take it back."
         LinkState.BLUETOOTH_OFF -> "Turn on Bluetooth in Quick Settings to connect."
@@ -74,6 +82,15 @@ fun DeviceSheet(model: AppModel, onDismiss: () -> Unit) {
                 Labeled("Status", statusText)
                 model.deviceName?.let { Labeled("Name", it) }
                 model.firmware?.let { Labeled("Firmware", it) }
+            }
+
+            if (model.isSlowToFind) {
+                Section(header = "Can't find your BedJet?", footer = "Lull keeps looking while it's open.") {
+                    Tip(Icons.Filled.Bed, "Lull works with BedJet 3 and BedJet V2.")
+                    Tip(Icons.Filled.Close, "Force-quit the BedJet app: open your recent apps, then swipe the BedJet app away.")
+                    Tip(Icons.Filled.Smartphone, "Close the BedJet app on any other phone or tablet nearby.")
+                    Tip(Icons.Filled.Power, "Unplug the BedJet for 10 seconds, then plug it back in.")
+                }
             }
 
             val extra = model.status?.extra
@@ -152,6 +169,15 @@ private fun Section(header: String? = null, footer: String? = null, content: @Co
             Text(footer, fontSize = 13.sp, color = Theme.secondary, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
         }
     }
+}
+
+@Composable
+private fun Tip(icon: ImageVector, text: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 11.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, null, tint = Theme.green, modifier = Modifier.size(22.dp))
+        Text(text, fontSize = 17.sp)
+    }
+    HorizontalDivider(color = Theme.hairline)
 }
 
 @Composable

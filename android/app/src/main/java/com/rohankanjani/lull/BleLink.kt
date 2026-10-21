@@ -31,11 +31,16 @@ import androidx.core.content.ContextCompat
 import com.rohankanjani.lull.bedjetkit.BedJetError
 import com.rohankanjani.lull.bedjetkit.BedJetLink
 import com.rohankanjani.lull.bedjetkit.Codec
+import com.rohankanjani.lull.bedjetkit.CodecV2
 import com.rohankanjani.lull.bedjetkit.ConnectionTiming
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
+import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.Handoff
 import com.rohankanjani.lull.bedjetkit.LinkState
+import com.rohankanjani.lull.bedjetkit.deviceName
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,8 +48,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /**
- * Android Bluetooth transport for a BedJet 3. Connects to the remembered unit, or the first one found.
+ * Android Bluetooth transport for a BedJet 3 or V2. Connects to the remembered unit, or the first one found.
  * Everything runs on the main thread; Bluetooth callbacks are posted there.
+ *
+ * The BedJet 3 has its own GATT service. The V2 sends its serial protocol ([CodecV2]) through a
+ * Microchip "transparent UART" service, which other gadgets use too, so a V2 is recognised by its name.
  *
  * The BedJet accepts a single connection and stops advertising while it has one, so a second phone
  * cannot even see it. Two phones share it by handing over: the phone that wants the BedJet briefly
@@ -62,6 +70,10 @@ class BleLink(context: Context) : BedJetLink {
             if (value == LinkState.READY) stopRequesting()
             onStateChange?.invoke(value)
         }
+    override var generation: Generation = Generation.V3
+        private set
+    override var lastStatus: DeviceStatus? = null
+        private set
     override var onStateChange: ((LinkState) -> Unit)? = null
     override var onStatus: ((DeviceStatus) -> Unit)? = null
     /** Return false to postpone a hand-over, for example while a schedule is being saved. */
@@ -76,6 +88,9 @@ class BleLink(context: Context) : BedJetLink {
         val NAME: UUID = uuid("2001")
         val COMMAND: UUID = uuid("2004")
         val REPLY: UUID = uuid("2006")
+        val UART_SERVICE: UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
+        val UART_NOTIFY: UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
+        val UART_WRITE: UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
         val CLIENT_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         const val REMEMBERED_KEY = "peripheral"
         const val NAME_KEY = "deviceName"
@@ -84,6 +99,11 @@ class BleLink(context: Context) : BedJetLink {
         const val COURTESY_MS = 10_000L
         /** How long a request is advertised. Shorter than the courtesy, so one request is answered once. */
         const val REQUEST_DURATION_MS = 8_000L
+        /**
+         * How long a unit gets to accept a connection before Lull scans for any BedJet instead.
+         * Longer than the request, so another phone has time to hand the unit over.
+         */
+        const val CONNECT_PATIENCE_MS = 12_000L
         const val OPERATION_TIMEOUT_MS = 5_000L
         /** Status an operation finishes with when the connection went away before it completed. */
         const val LINK_GONE = -1
@@ -91,6 +111,7 @@ class BleLink(context: Context) : BedJetLink {
 
     private val prefs = context.getSharedPreferences("BedJetKit", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
+    private val scope = MainScope()
     private val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
 
     private var gatt: BluetoothGatt? = null
@@ -103,8 +124,8 @@ class BleLink(context: Context) : BedJetLink {
     private var advertising: AdvertiseCallback? = null
     private var scanning: ScanCallback? = null
     private var radioReceiver: BroadcastReceiver? = null
-    /** A direct connection to the remembered unit gives up after about 30 seconds; after that, wait for it. */
-    private var directFailed = false
+    private var skipsRememberedUnit = false
+    private var connectGeneration = 0
     private var askedAt: Long? = null
     private var linkUpAfter: Double? = null
     private var radioOnAfter = 0.0
@@ -116,6 +137,10 @@ class BleLink(context: Context) : BedJetLink {
     private var lastExtra: DeviceStatus.Extra? = null
     private var tag = 0
     private val serial = Mutex()
+    /** A V2 answers through the same notifications that carry its status. */
+    private class PendingReply(val query: Int, val reply: CompletableDeferred<ByteArray>)
+    private var pendingReply: PendingReply? = null
+    private var uartBuffer = ByteArray(0)
 
     // Android runs one GATT operation at a time, so everything sent to the unit waits its turn here.
     private class Operation(val begin: (BluetoothGatt) -> Boolean, val finish: (ByteArray?, Int) -> Unit)
@@ -133,6 +158,7 @@ class BleLink(context: Context) : BedJetLink {
         stopRequesting()
         stopScan()
         yieldedUntil = 0
+        skipsRememberedUnit = false
         stopWatchingRadio()
         val gatt = gatt
         if (gatt != null && state == LinkState.READY) {
@@ -153,14 +179,7 @@ class BleLink(context: Context) : BedJetLink {
             // A phone that handed over waits quietly for the BedJet; asking for it again goes straight to it.
             gatt?.close()
             gatt = null
-            directFailed = false
             state = LinkState.SEARCHING
-        } else if (directFailed && state != LinkState.READY) {
-            // Likewise a phone waiting in the background because another phone had the BedJet:
-            // that phone is about to be asked to let go, so be ready to take it straight away.
-            gatt?.close()
-            gatt = null
-            directFailed = false
         }
         if (state != LinkState.READY && askedAt == null) {
             askedAt = SystemClock.elapsedRealtime()
@@ -181,7 +200,6 @@ class BleLink(context: Context) : BedJetLink {
     /** Forgets the remembered unit so the next start pairs with whichever BedJet is nearest. */
     fun forget() {
         prefs.edit().remove(REMEMBERED_KEY).remove(NAME_KEY).apply()
-        directFailed = false
         gatt?.disconnect()
     }
 
@@ -189,7 +207,17 @@ class BleLink(context: Context) : BedJetLink {
         serial.withLock { write(command) }
     }
 
-    override suspend fun query(request: Int): ByteArray = serial.withLock {
+    override suspend fun query(request: Int): ByteArray {
+        if (generation == Generation.V2) {
+            return serial.withLock {
+                // A request the unit missed is simply asked again.
+                try { exchange(request) } catch (_: BedJetError.Timeout) { exchange(request) }
+            }
+        }
+        return queryV3(request)
+    }
+
+    private suspend fun queryV3(request: Int): ByteArray = serial.withLock {
         // The reply characteristic keeps its previous contents until the unit has answered,
         // so retry until the echoed request and tag match.
         repeat(4) { attempt ->
@@ -262,26 +290,48 @@ class BleLink(context: Context) : BedJetLink {
         if (state == LinkState.YIELDED && SystemClock.elapsedRealtime() < yieldedUntil) return
         val adapter = adapter ?: return
         val remembered = prefs.getString(REMEMBERED_KEY, null)
-        if (remembered != null && BluetoothAdapter.checkBluetoothAddress(remembered)) {
+        if (!skipsRememberedUnit && remembered != null && BluetoothAdapter.checkBluetoothAddress(remembered)) {
             // Going straight to the unit this phone already knows is several times quicker than scanning for it.
             foundByScan = false
             connect(adapter.getRemoteDevice(remembered))
         } else {
             if (state != LinkState.YIELDED) state = LinkState.SEARCHING
             foundByScan = true
-            startScan(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build(), forRequests = false)
+            // Not filtered by service, because a V2 is known by its name rather than by what it advertises.
+            startScan(filter = null, forRequests = false)
         }
     }
 
     private fun connect(device: BluetoothDevice) {
         stopScan()
         // A phone that handed over keeps saying so while it waits; the connection completes
-        // whenever the BedJet becomes free again. So does a phone whose quick attempt timed out,
-        // most likely because another phone has the BedJet.
-        val waits = state == LinkState.YIELDED || directFailed
+        // whenever the BedJet becomes free again.
+        val waits = state == LinkState.YIELDED
         if (state != LinkState.YIELDED) state = LinkState.CONNECTING
         @Suppress("DEPRECATION") // The replacement needs Android 17; this works on every version Lull supports.
-        gatt = device.connectGatt(context, waits, callback, BluetoothDevice.TRANSPORT_LE)
+        val target = device.connectGatt(context, waits, callback, BluetoothDevice.TRANSPORT_LE)
+        gatt = target
+        expectAnswer(target)
+    }
+
+    /**
+     * A remembered unit that was replaced, reset or moved away never answers. Give it a while, then
+     * look for any BedJet instead.
+     */
+    private fun expectAnswer(target: BluetoothGatt) {
+        connectGeneration += 1
+        val generation = connectGeneration
+        main.postDelayed({
+            if (connectGeneration != generation || !wantsConnection || gatt !== target) return@postDelayed
+            // A phone that handed over is meant to wait.
+            if (state != LinkState.CONNECTING && state != LinkState.SEARCHING) return@postDelayed
+            target.close()
+            gatt = null
+            skipsRememberedUnit = true
+            foundByScan = true
+            state = LinkState.SEARCHING
+            startScan(filter = null, forRequests = false)
+        }, CONNECT_PATIENCE_MS)
     }
 
     private fun dropConnection(reconnect: Boolean = true) {
@@ -291,6 +341,10 @@ class BleLink(context: Context) : BedJetLink {
         statusCharacteristic = null
         lastHead = null
         lastExtra = null
+        lastStatus = null
+        uartBuffer = ByteArray(0)
+        pendingReply?.reply?.completeExceptionally(BedJetError.NotConnected)
+        pendingReply = null
         current?.finish?.invoke(null, LINK_GONE)
         current = null
         while (operations.isNotEmpty()) operations.removeFirst().finish(null, LINK_GONE)
@@ -333,7 +387,7 @@ class BleLink(context: Context) : BedJetLink {
         startScan(ScanFilter.Builder().setServiceUuid(ParcelUuid(request)).build(), forRequests = true)
     }
 
-    private fun startScan(filter: ScanFilter, forRequests: Boolean) {
+    private fun startScan(filter: ScanFilter?, forRequests: Boolean) {
         stopScan()
         val scanner = adapter?.bluetoothLeScanner ?: return
         val callback = object : ScanCallback() {
@@ -343,7 +397,7 @@ class BleLink(context: Context) : BedJetLink {
                     if (forRequests) {
                         // The only thing scanned for while connected is another phone asking for this BedJet.
                         if (state == LinkState.READY) handOver()
-                    } else if (gatt == null) {
+                    } else if (gatt == null && isBedJet(result)) {
                         connect(result.device)
                     }
                 }
@@ -360,7 +414,14 @@ class BleLink(context: Context) : BedJetLink {
         }
         scanning = callback
         val mode = if (forRequests) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_LATENCY
-        scanner.startScan(listOf(filter), ScanSettings.Builder().setScanMode(mode).build(), callback)
+        scanner.startScan(filter?.let(::listOf), ScanSettings.Builder().setScanMode(mode).build(), callback)
+    }
+
+    private fun isBedJet(result: ScanResult): Boolean {
+        val record = result.scanRecord
+        if (record?.serviceUuids?.contains(ParcelUuid(SERVICE)) == true) return true
+        val name = record?.deviceName ?: result.device.name ?: ""
+        return name.uppercase().startsWith("BEDJET")
     }
 
     private fun stopScan() {
@@ -422,6 +483,19 @@ class BleLink(context: Context) : BedJetLink {
         enqueue(operation)
         val status = withTimeoutOrNull(OPERATION_TIMEOUT_MS) { done.await() } ?: run { abandon(operation); throw BedJetError.Timeout }
         if (status != BluetoothGatt.GATT_SUCCESS) throw BedJetError.NotConnected
+    }
+
+    private suspend fun exchange(request: Int): ByteArray {
+        if (state != LinkState.READY || command == null) throw BedJetError.NotConnected
+        // Listen before writing, since the reply can arrive before the write is acknowledged.
+        val pending = PendingReply(request, CompletableDeferred())
+        pendingReply = pending
+        try {
+            write(CodecV2.request(request))
+            return withTimeoutOrNull(OPERATION_TIMEOUT_MS) { pending.reply.await() } ?: throw BedJetError.Timeout
+        } finally {
+            if (pendingReply === pending) pendingReply = null
+        }
     }
 
     private suspend fun read(): ByteArray {
@@ -495,27 +569,57 @@ class BleLink(context: Context) : BedJetLink {
                 }))
             }
         }
+        lastStatus = status
         onStatus?.invoke(status)
+    }
+
+    /** A V2 streams packets that notifications may split, and answers requests among its status updates. */
+    private fun receiveUart(chunk: ByteArray) {
+        val split = CodecV2.takePackets(uartBuffer + chunk)
+        uartBuffer = split.rest
+        for (packet in split.packets) {
+            CodecV2.parseStatus(packet)?.let { status ->
+                lastStatus = status
+                onStatus?.invoke(status)
+            }
+            val name = CodecV2.reply(CodecV2.Query.DEVICE_NAME, packet)?.let(CodecV2::parseName)
+            if (!name.isNullOrEmpty()) {
+                // The unit's own name identifies it to the other phone during a hand-over.
+                prefs.edit().putString(NAME_KEY, name).apply()
+                watchForRequests()
+            }
+            val pending = pendingReply ?: continue
+            val payload = CodecV2.reply(pending.query, packet) ?: continue
+            pendingReply = null
+            pending.reply.complete(payload)
+        }
     }
 
     private fun seconds(since: Long): Double = (SystemClock.elapsedRealtime() - since) / 1000.0
 
     private fun discovered(gatt: BluetoothGatt) {
-        val service = gatt.getService(SERVICE)
-        if (service == null) {
+        servicesAfter = askedAt?.let { seconds(it) } ?: 0.0
+        val bedJet = gatt.getService(SERVICE)
+        val uart = gatt.getService(UART_SERVICE)
+        if (bedJet != null) {
+            generation = Generation.V3
+            command = bedJet.getCharacteristic(COMMAND)
+            reply = bedJet.getCharacteristic(REPLY)
+            statusCharacteristic = bedJet.getCharacteristic(STATUS)
+        } else if (uart != null) {
+            generation = Generation.V2
+            command = uart.getCharacteristic(UART_WRITE)
+            statusCharacteristic = uart.getCharacteristic(UART_NOTIFY)
+        } else {
             gatt.disconnect()
             return
         }
-        servicesAfter = askedAt?.let { seconds(it) } ?: 0.0
-        command = service.getCharacteristic(COMMAND)
-        reply = service.getCharacteristic(REPLY)
-        statusCharacteristic = service.getCharacteristic(STATUS)
-        if (command == null || reply == null) {
+        if (command == null || (reply == null && generation == Generation.V3)) {
             gatt.disconnect()
             return
         }
         statusCharacteristic?.let { status -> enqueue(Operation(begin = { it.subscribe(status) }, finish = { _, _ -> })) }
-        service.getCharacteristic(NAME)?.let { name ->
+        bedJet?.getCharacteristic(NAME)?.let { name ->
             enqueue(Operation(begin = { it.readCharacteristic(name) }, finish = { value, _ ->
                 // The unit's own name identifies it to the other phone during a hand-over.
                 if (value != null && value.isNotEmpty()) {
@@ -530,9 +634,15 @@ class BleLink(context: Context) : BedJetLink {
         }
         askedAt = null
         linkUpAfter = null
-        directFailed = false
         state = LinkState.READY
         watchForRequests()
+        if (generation == Generation.V2) {
+            // The official app asks for the unit's details first thing, and the name is needed for hand-overs.
+            scope.launch {
+                runCatching { query(CodecV2.Query.INFO) }
+                runCatching { deviceName() }
+            }
+        }
     }
 
     private val callback = object : BluetoothGattCallback() {
@@ -540,12 +650,13 @@ class BleLink(context: Context) : BedJetLink {
             main.post {
                 if (gatt !== this@BleLink.gatt) return@post
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    connectGeneration += 1
+                    skipsRememberedUnit = false
                     prefs.edit().putString(REMEMBERED_KEY, gatt.device.address).apply()
                     linkUpAfter = askedAt?.let { seconds(it) }
                     // A larger packet fits the whole status in one notification; the unit copes either way.
                     if (!gatt.requestMtu(64)) gatt.discoverServices()
                 } else {
-                    if (state != LinkState.READY && state != LinkState.YIELDED && !foundByScan) directFailed = true
                     gatt.close()
                     dropConnection(reconnect = wantsConnection)
                 }
@@ -580,9 +691,11 @@ class BleLink(context: Context) : BedJetLink {
         }
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            if (characteristic.uuid != STATUS) return
             val copy = value.copyOf()
-            main.post { if (gatt === this@BleLink.gatt) receiveStatus(copy) }
+            when (characteristic.uuid) {
+                STATUS -> main.post { if (gatt === this@BleLink.gatt) receiveStatus(copy) }
+                UART_NOTIFY -> main.post { if (gatt === this@BleLink.gatt) receiveUart(copy) }
+            }
         }
 
         @Deprecated("Used before Android 13")

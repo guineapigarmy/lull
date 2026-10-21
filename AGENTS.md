@@ -30,7 +30,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | What | iPhone | Android |
 | --- | --- | --- |
 | Protocol types and limits | `BedJetKit/Sources/BedJetKit/Models.swift` | `android/bedjetkit/src/main/kotlin/com/rohankanjani/lull/bedjetkit/Models.kt` |
-| Byte encoding | `BedJetKit/.../Codec.swift` | `android/bedjetkit/.../Codec.kt` |
+| Byte encoding, BedJet 3 | `BedJetKit/.../Codec.swift` | `android/bedjetkit/.../Codec.kt` |
+| Byte encoding, BedJet V2 | `BedJetKit/.../CodecV2.swift` | `android/bedjetkit/.../CodecV2.kt` |
 | Link protocol and helpers | `BedJetKit/.../Link.swift` | `android/bedjetkit/.../Link.kt` |
 | Simulated BedJet | `BedJetKit/.../DemoLink.swift` | `android/bedjetkit/.../DemoLink.kt` |
 | Bluetooth transport | `BedJetKit/.../BLELink.swift` | `android/app/src/main/java/com/rohankanjani/lull/BleLink.kt` |
@@ -45,7 +46,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Night curve | `Lull/Views/NightCurve.swift` | `android/app/.../ui/NightCurve.kt` |
 | BedJet sheet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
-| Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt` |
+| Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
 | UI tests | `LullUITests/LullUITests.swift` | `android/app/src/androidTest/.../LullUiTest.kt` |
 | Store screenshots | `LullUITests/StoreScreenshots.swift` | `android/app/src/androidTest/.../StoreScreenshots.kt` |
@@ -79,8 +80,6 @@ Platform conventions, not behaviour:
 - Android uses Material components where iOS uses system ones (bottom navigation bar, bottom sheets,
   the time picker, the long-press menu), styled to match Lull's look.
 - Android asks for the "Nearby devices" permission when Lull first needs Bluetooth; iOS asks for Bluetooth.
-- On Android, if a quick connection to the remembered BedJet times out (usually because another phone
-  has it), Lull waits for it in the background, which is what iOS does from the start.
 - Google Play skips a release whose version is already on the production track, but unlike the App
   Store lane it doesn't replace a release that is still in review.
 

@@ -2,7 +2,10 @@ package com.rohankanjani.lull.bedjetkit
 
 import kotlinx.serialization.Serializable
 
-/** Operating modes as the BedJet 3 reports them and stores them in program steps. */
+/**
+ * Operating modes as the BedJet 3 reports them and stores them in program steps. [CodecV2] maps the
+ * V2's own codes onto these.
+ */
 @Serializable
 enum class Mode(val raw: Int) {
     STANDBY(0),
@@ -42,6 +45,23 @@ enum class Mode(val raw: Int) {
     companion object {
         fun fromRaw(raw: Int): Mode? = entries.firstOrNull { it.raw == raw }
     }
+}
+
+/**
+ * Which BedJet a link is talking to. Both run the same kind of program on the unit, but they speak
+ * different protocols and the V2 has fewer modes.
+ */
+enum class Generation {
+    V2,
+    V3;
+
+    fun supports(mode: Mode): Boolean = when (this) {
+        V3 -> true
+        V2 -> mode in setOf(Mode.STANDBY, Mode.HEAT, Mode.TURBO, Mode.COOL, Mode.WAIT)
+    }
+
+    /** The V2 only takes a target temperature for Heat. */
+    fun adjustsTemperature(mode: Mode): Boolean = if (this == V2) mode == Mode.HEAT else mode.usesTemperature
 }
 
 /** One step of an on-device program ("biorhythm"). Five bytes on the wire. */

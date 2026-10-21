@@ -29,6 +29,7 @@ class DemoLink(
         private set
     var clock: Pair<Int, Int>? = null
         private set
+    override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) status else null
 
     private var status = DeviceStatus(
         remainingSeconds = 0, actualTemperature = 46, targetTemperature = 60, mode = Mode.STANDBY, fanStep = 7,

@@ -49,7 +49,6 @@ import com.rohankanjani.lull.bedjetkit.DeviceStatus
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.maxMinutes
-import com.rohankanjani.lull.remoteModes
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,7 +101,7 @@ fun RemoteScreen(model: AppModel) {
         }
 
         Box(Modifier.alpha(if (model.canControl) 1f else 0.4f)) {
-            ModePicker(remoteModes + Mode.STANDBY, chosenMode ?: status?.mode) { picked ->
+            ModePicker(model.remoteModes + Mode.STANDBY, chosenMode ?: status?.mode) { picked ->
                 if (!model.canControl) return@ModePicker
                 chosenMode = picked
                 model.scope.launch {
@@ -120,7 +119,7 @@ fun RemoteScreen(model: AppModel) {
             val shown = status ?: return@AnimatedVisibility
             Card(padding = 18.dp) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (shown.mode.usesTemperature) {
+                    if (model.adjustsTemperature(shown.mode)) {
                         TemperatureSlider(
                             model, shown.mode, temperature,
                             onChange = {
@@ -234,7 +233,7 @@ fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
             if (status != null) {
                 Eyebrow(mode.activity)
                 Text(
-                    if (isOn && mode.usesTemperature) model.degrees(status.targetTemperature) else if (isOn) "${status.fanPercent}%" else "Off",
+                    if (isOn && model.adjustsTemperature(mode)) model.degrees(status.targetTemperature) else if (isOn) "${status.fanPercent}%" else "Off",
                     fontSize = 60.sp, fontWeight = FontWeight.Thin, style = Theme.tabular,
                 )
                 Text(

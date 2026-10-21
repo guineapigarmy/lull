@@ -15,18 +15,26 @@ import com.rohankanjani.lull.bedjetkit.BedJetLink
 import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.DemoLink
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
+import com.rohankanjani.lull.bedjetkit.Generation
+import com.rohankanjani.lull.bedjetkit.acknowledgeNotification
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.StoredProgram
 import com.rohankanjani.lull.bedjetkit.deviceName
 import com.rohankanjani.lull.bedjetkit.firmwareVersion
+import com.rohankanjani.lull.bedjetkit.setFan
+import com.rohankanjani.lull.bedjetkit.setLED
 import com.rohankanjani.lull.bedjetkit.setMode
+import com.rohankanjani.lull.bedjetkit.setMuted
+import com.rohankanjani.lull.bedjetkit.setRuntime
+import com.rohankanjani.lull.bedjetkit.setTemperature
 import com.rohankanjani.lull.bedjetkit.startProgram
 import com.rohankanjani.lull.bedjetkit.store
 import com.rohankanjani.lull.bedjetkit.storedPrograms
 import com.rohankanjani.lull.bedjetkit.syncClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -78,6 +86,14 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     private val prefs = application.getSharedPreferences("Lull", Context.MODE_PRIVATE)
 
+    /** The kind of BedJet last connected, remembered so schedules can be edited for it while it is away. */
+    private var savedGeneration by mutableStateOf(
+        prefs.getString("generation", null)?.let { name -> Generation.entries.firstOrNull { it.name == name } } ?: Generation.V3,
+    )
+    var generation: Generation
+        get() = savedGeneration
+        private set(value) { savedGeneration = value; prefs.edit().putString("generation", value.name).apply() }
+
     private var fahrenheit by mutableStateOf(prefs.getBoolean("useFahrenheit", usesUSUnits()))
     var useFahrenheit: Boolean
         get() = fahrenheit
@@ -88,6 +104,8 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
         get() = demo
         set(value) { demo = value; prefs.edit().putBoolean("demoMode", value).apply(); reconnect() }
 
+    /** Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check. */
+    var isSlowToFind by mutableStateOf(false); private set
     var isBusy by mutableStateOf(false); private set
     var errorMessage by mutableStateOf<String?>(null)
     /** Set when every slot on the BedJet is taken and the user has to pick one to reuse. */
@@ -97,6 +115,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     private var lastRefresh = 0L
     private var keepsLongestRuntime = true
     private var isLoaded = false
+    private var searchTimer: Job? = null
 
     val tonight: Schedule? get() = schedules.firstOrNull { it.id == tonightID } ?: schedules.firstOrNull()
     val isConnected: Boolean get() = linkState == LinkState.READY
@@ -148,6 +167,32 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
         linkState = link.state
         lastRefresh = 0
         link.start()
+        restartSearchTimer()
+    }
+
+    private fun restartSearchTimer() {
+        searchTimer?.cancel()
+        searchTimer = null
+        isSlowToFind = false
+        timeSearch()
+    }
+
+    /**
+     * Counts how long Lull has been looking, across searching and connecting, but not while
+     * another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
+     */
+    private fun timeSearch() {
+        if (demoMode || (linkState != LinkState.SEARCHING && linkState != LinkState.CONNECTING)) {
+            searchTimer?.cancel()
+            searchTimer = null
+            isSlowToFind = false
+            return
+        }
+        if (searchTimer != null) return
+        searchTimer = viewModelScope.launch {
+            delay(15_000)
+            isSlowToFind = true
+        }
     }
 
     /**
@@ -161,6 +206,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     fun appBecameActive() {
         link?.start()
+        restartSearchTimer()
     }
 
     /** Bluetooth access was just granted or refused; look at the radio again. */
@@ -175,8 +221,10 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     private fun linkStateChanged(state: LinkState) {
         linkState = state
+        timeSearch()
         val link = link ?: return
         if (state != LinkState.READY) return
+        generation = link.generation
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
         // only needs re-reading now and then.
@@ -236,13 +284,20 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
         val schedule = tonight ?: return
         val link = link ?: return
         perform {
-            if (deviceSlots.isEmpty()) refreshSlots()
-            val slot = slot ?: deviceSlots.indexOf(null).takeIf { it >= 0 }
-            if (slot == null) {
-                needsSlotChoice = true
-                return@perform
+            // A V2 holds just the one sequence, which Lull always replaces.
+            val slot: Int
+            if (link.generation == Generation.V2) {
+                slot = 0
+            } else {
+                if (deviceSlots.isEmpty()) refreshSlots()
+                val free = this.slot ?: deviceSlots.indexOf(null).takeIf { it >= 0 }
+                if (free == null) {
+                    needsSlotChoice = true
+                    return@perform
+                }
+                slot = free
+                this.slot = slot
             }
-            this.slot = slot
             link.store(schedule.program, slot)
             link.startProgram(slot)
             confirmStarted()
@@ -268,7 +323,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
                 else -> null
             }
             if (refusal != null) {
-                attempt { link.send(Codec.acknowledgeNotification) }
+                attempt { link.acknowledgeNotification() }
                 throw refusal
             }
         }
@@ -302,7 +357,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     suspend fun setTemperature(halfCelsius: Int) {
         val link = link ?: return
         perform {
-            link.send(Codec.setTemperature(halfCelsius))
+            link.setTemperature(halfCelsius)
             extendRuntime()
         }
     }
@@ -310,7 +365,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     suspend fun setFan(percent: Int) {
         val link = link ?: return
         perform {
-            link.send(Codec.setFan(percent / 5 - 1))
+            link.setFan(percent / 5 - 1)
             extendRuntime()
         }
     }
@@ -318,7 +373,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     suspend fun setRuntime(minutes: Int) {
         val link = link ?: return
         keepsLongestRuntime = false
-        perform { link.send(Codec.setRuntime(minutes)) }
+        perform { link.setRuntime(minutes) }
     }
 
     /**
@@ -336,7 +391,7 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             val status = status
             if (status != null && status.isRunning && status.maxRuntimeMinutes > 0 && (entering == null || status.mode == entering)) {
                 if (status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60) {
-                    link.send(Codec.setRuntime(status.maxRuntimeMinutes))
+                    link.setRuntime(status.maxRuntimeMinutes)
                 }
                 return
             }
@@ -346,12 +401,12 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
 
     suspend fun setLED(on: Boolean) {
         val link = link ?: return
-        perform { link.send(Codec.setLED(on)) }
+        perform { link.setLED(on) }
     }
 
     suspend fun setMuted(muted: Boolean) {
         val link = link ?: return
-        perform { link.send(Codec.setMuted(muted)) }
+        perform { link.setMuted(muted) }
     }
 
     private suspend fun perform(work: suspend () -> Unit) {
@@ -404,6 +459,12 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     }
 
     // Schedules
+
+    /** Modes the Remote and the phase editor offer for this kind of BedJet. */
+    val remoteModes: List<Mode> get() = com.rohankanjani.lull.remoteModes.filter(generation::supports)
+    val phaseModes: List<Mode> get() = com.rohankanjani.lull.phaseModes.filter(generation::supports)
+
+    fun adjustsTemperature(mode: Mode): Boolean = generation.adjustsTemperature(mode)
 
     fun save(schedule: Schedule) {
         val index = schedules.indexOfFirst { it.id == schedule.id }

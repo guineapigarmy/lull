@@ -1,4 +1,4 @@
-Lull turns your BedJet 3 into a climate that follows you through the night.
+Lull turns your BedJet 3 or BedJet V2 into a climate that follows you through the night.
 
 PLAN YOUR WHOLE NIGHT
 Build a schedule as a series of phases: warm the bed before you get in, cool it while you sleep, and warm it again before you wake. Each phase has its own mode, temperature, fan speed and length, and the whole night shows up as one simple curve.
@@ -17,6 +17,6 @@ No account, no sign-up and no cloud. Lull talks to your BedJet over Bluetooth an
 
 Includes four starting schedules and a demo mode, so you can look around before your BedJet is nearby.
 
-Requires a BedJet 3. The BedJet V2 isn't supported.
+Requires a BedJet 3 or BedJet V2. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
 
 Lull is an independent app and is not affiliated with or endorsed by BedJet. BedJet is a trademark of its owner.

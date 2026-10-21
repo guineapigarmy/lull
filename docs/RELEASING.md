@@ -1,8 +1,26 @@
-# Releasing to the App Store
+# Releasing
 
-Every push to `main` that changes the app runs [`.github/workflows/app-store.yml`](../.github/workflows/app-store.yml).
-It tests BedJetKit, builds and signs the app, uploads it to App Store Connect, and submits it for review.
-Once Apple approves it, it's released automatically.
+Lull ships to both stores from `main`, under one version number:
+
+- **App Store**: [`.github/workflows/app-store.yml`](../.github/workflows/app-store.yml) tests BedJetKit,
+  builds and signs the iPhone app, uploads it to App Store Connect, and submits it for review. Once Apple
+  approves it, it's released automatically.
+- **Google Play**: [`.github/workflows/play-store.yml`](../.github/workflows/play-store.yml) runs the
+  Android tests, builds and signs the Android app, uploads it to Google Play and releases it to
+  production. Google reviews it before it reaches people.
+
+Each workflow skips pushes that only touch the other platform. Both run for changes to shared files,
+such as the version in `Lull.xcodeproj`.
+
+## Cutting a release
+
+1. Raise **Version** in Xcode (`MARKETING_VERSION`, for example 1.0 → 1.1). The Android app reads the
+   same value, so this releases both.
+2. Write what's new in both [`fastlane/metadata/en-US/release_notes.txt`](../fastlane/metadata/en-US/release_notes.txt)
+   and [`fastlane/metadata/android/en-US/changelogs/default.txt`](../fastlane/metadata/android/en-US/changelogs/default.txt).
+3. Merge to `main`, then watch **App Store release** and **Google Play release** in the Actions tab.
+
+# App Store
 
 What a push does depends on the version in Xcode (`MARKETING_VERSION`, shown as **Version** on the
 Lull target's General tab):
@@ -16,13 +34,7 @@ Lull target's General tab):
 Build numbers are picked automatically: one higher than anything already uploaded for that version.
 Docs-only changes (Markdown files and screenshots) don't trigger a release.
 
-## Cutting a release
-
-1. Raise **Version** (for example 1.0 → 1.1).
-2. Write what's new in [`fastlane/metadata/en-US/release_notes.txt`](../fastlane/metadata/en-US/release_notes.txt).
-3. Merge to `main`, then watch the **App Store release** run in the Actions tab.
-
-## One-time setup
+## App Store one-time setup
 
 The workflow stays off until the steps below are done.
 
@@ -83,9 +95,101 @@ gh workflow run app-store.yml --repo rkanjani/lull
 
 To pause releases, set the variable to `false`.
 
-## Security notes
 
-- Secrets are scoped to the `app-store` environment, and only the `main` branch can deploy to it, so
-  workflows from forks and pull requests never see them.
-- The API key can manage apps but not users or payments. Revoke it in App Store Connect if it leaks.
+# Google Play
+
+The Play lane checks the production track first:
+
+| State of that version on Google Play | What the workflow does |
+| --- | --- |
+| Already on the production track (live or in review) | Nothing. Raise the version to release. |
+| New | Uploads a build, updates the listing text and release notes, and releases it to production. |
+
+Version codes are picked automatically: one higher than anything already uploaded to any track. The
+listing images in `fastlane/metadata/android/en-US/images` are uploaded by hand when they change;
+[`android/scripts/play-listing-images.sh`](../android/scripts/play-listing-images.sh) rebuilds them from
+fresh `StoreScreenshots` captures.
+
+## Google Play one-time setup
+
+The workflow stays off until the steps below are done.
+
+### 1. Developer account and app
+
+In [Play Console](https://play.google.com/console), create the app **Lull for BedJet** (package
+`com.rohankanjani.lull`, free, app), then complete everything under **Policy and programs → App content**
+(privacy policy: `https://github.com/rkanjani/lull/blob/main/PRIVACY.md`; no ads; data safety: no data
+collected or shared; target audience 18+; content rating questionnaire) and the store listing.
+
+### 2. Upload key
+
+Release builds are signed with an upload key, and Google re-signs them with the app signing key it keeps
+(Play App Signing). Create the upload key once and keep it, and its password, in a password manager:
+
+```bash
+keytool -genkeypair -keystore upload.jks -alias upload -keyalg RSA -keysize 4096 -validity 10000
+```
+
+If it's ever lost, request an upload key reset in **Test and release → App integrity**.
+
+### 3. Service account
+
+The workflow publishes as a Google Cloud service account:
+
+1. In [Google Cloud](https://console.cloud.google.com), pick or create a project, enable the **Google
+   Play Android Developer API**, create a service account and download a JSON key for it.
+2. In Play Console, **Users and permissions → Invite new users**, add the service account's email, and
+   give it **Release apps to testing tracks** and **Release to production, exclude devices, and use
+   Play App Signing** for Lull, plus **Manage store presence** for the listing text.
+
+### 4. Secrets
+
+The secrets live in the repository's `play-store` environment, which only `main` can use:
+
+```bash
+gh secret set PLAY_SERVICE_ACCOUNT_JSON --env play-store --repo rkanjani/lull < play-service-account.json
+```
+
+```bash
+base64 -i upload.jks | gh secret set PLAY_UPLOAD_KEYSTORE_BASE64 --env play-store --repo rkanjani/lull
+```
+
+```bash
+gh secret set PLAY_UPLOAD_KEYSTORE_PASSWORD --env play-store --repo rkanjani/lull
+```
+
+Then delete the local JSON key.
+
+### 5. First release
+
+Google only accepts draft releases for an app that has never been sent for review. Upload the first one
+as a draft, then send it for review from Play Console (**Publishing overview → Send for review**):
+
+```bash
+gh variable set PLAY_RELEASE_STATUS --body draft --repo rkanjani/lull
+```
+
+```bash
+gh variable set PLAY_STORE_RELEASE --body true --repo rkanjani/lull
+```
+
+```bash
+gh workflow run play-store.yml --repo rkanjani/lull
+```
+
+After the first release is approved, switch to full releases:
+
+```bash
+gh variable delete PLAY_RELEASE_STATUS --repo rkanjani/lull
+```
+
+To pause Play releases, set `PLAY_STORE_RELEASE` to `false`.
+
+# Security notes
+
+- Secrets are scoped to the `app-store` and `play-store` environments, and only the `main` branch can
+  deploy to them, so workflows from forks and pull requests never see them.
+- The App Store Connect key can manage apps but not users or payments. Revoke it in App Store Connect
+  if it leaks. The Play service account has only the release permissions above; delete its key in
+  Google Cloud if it leaks.
 - Third-party actions are pinned to commit SHAs. Review the changes before bumping them.

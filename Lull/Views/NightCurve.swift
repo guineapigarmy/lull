@@ -129,6 +129,7 @@ struct NightCurve: View {
 /// Curve with bedtime and wake labels underneath.
 struct NightTimeline: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     var schedule: Schedule
     var startMinute: Int?
     var progress: Double?
@@ -140,21 +141,24 @@ struct NightTimeline: View {
         VStack(spacing: 10) {
             NightCurve(phases: schedule.phases, progress: progress, selection: selection)
                 .frame(height: height)
-            // Bedtime, length and wake across one line, or stacked when large text won't fit.
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    label(Format.clock(start), "moon.fill")
-                    Spacer()
-                    Text(Format.duration(schedule.totalMinutes))
-                    Spacer()
-                    label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+            // Bedtime, length and wake across one line, stacked at the largest text sizes.
+            Group {
+                if typeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 4) {
+                        label(Format.clock(start), "moon.fill")
+                        label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+                        Text(Format.duration(schedule.totalMinutes))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack {
+                        label(Format.clock(start), "moon.fill")
+                        Spacer()
+                        Text(Format.duration(schedule.totalMinutes))
+                        Spacer()
+                        label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    label(Format.clock(start), "moon.fill")
-                    label(Format.clock(start + schedule.totalMinutes), "sun.max.fill")
-                    Text(Format.duration(schedule.totalMinutes))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scaledFont(13, .medium)
             .foregroundStyle(Theme.secondary)

@@ -309,7 +309,11 @@ struct ModePicker: View {
                 Button { onSelect(mode) } label: {
                     label {
                         Image(systemName: mode.symbol).scaledFont(18, .semibold)
-                        Text(mode.title).scaledFont(13, .semibold)
+                        Text(mode.title)
+                            .scaledFont(13, .semibold)
+                            .multilineTextAlignment(.center)
+                            // The name gets the room it needs before the icon does, and wraps rather than truncating.
+                            .layoutPriority(1)
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 8)

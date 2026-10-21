@@ -30,11 +30,11 @@ final class AccessibilityTests: XCTestCase {
                 .write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(textSize)-\(screen).png"))
         }
         // At the default size the Dynamic Type and clipping checks can only guess what larger text will do, so the
-        // run at the largest size checks the real layout for those. Contrast doesn't depend on text size and is
-        // checked at the default. At the largest size the clipping check reports "may clip at larger sizes" when
-        // there are none, without saying which text; the screenshots that run saves show nothing clipped.
+        // run at the largest size checks the real layout for those. Contrast is a property of the colours, which
+        // LullTests/ContrastTests checks pair by pair; at the largest size the audit's contrast readings differ
+        // between identical runs (it has flagged white on dark grey), so it's checked at the default size only.
         let checks: XCUIAccessibilityAuditType = isLarge
-            ? [.elementDetection, .sufficientElementDescription, .trait, .hitRegion, .dynamicType]
+            ? XCUIAccessibilityAuditType.all.subtracting(.contrast)
             : XCUIAccessibilityAuditType.all.subtracting([.dynamicType, .textClipped])
 
         // Content scrolled under the status bar, a navigation bar, the tab bar or the editor's bottom bar is
@@ -53,6 +53,9 @@ final class AccessibilityTests: XCTestCase {
             // (LullTests/VoiceOverTests checks that it is). At the largest text size the sheet fills the screen and this goes away.
             if overSheet && issue.auditType == .elementDetection { return true }
             if let element = issue.element {
+                // The longest mode name fills its button at the largest size and shows in full; the audit predicts it
+                // would clip at a size beyond the largest, where it would wrap.
+                if self.isLarge && issue.auditType == .textClipped && element.label == "Gentle heat" { return true }
                 let frame = element.frame
                 let underBar = frame.minY < top || frame.maxY > bottom
                 if underBar && [.contrast, .textClipped].contains(issue.auditType) { return true }

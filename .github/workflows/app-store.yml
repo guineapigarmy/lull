@@ -11,6 +11,9 @@ on:
       - screens.png
       - screenshots/**
       - app-store-screenshots/**
+      # The Android app ships through play-store.yml.
+      - android/**
+      - fastlane/metadata/android/**
   workflow_dispatch:
 
 # One release at a time. A push made while one runs waits, and only the newest waiting push runs.

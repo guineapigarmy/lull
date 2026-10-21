@@ -1,0 +1,73 @@
+# Releases the newest commit on main to Google Play production, the Android twin of app-store.yml.
+# Off until the PLAY_STORE_RELEASE repository variable is "true". Setup: docs/RELEASING.md.
+name: Google Play release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - screens.png
+      - screenshots/**
+      - app-store-screenshots/**
+      # The iPhone app ships through app-store.yml. Lull.xcodeproj stays: it holds the shared version.
+      - Lull/**
+      - LullUITests/**
+      - BedJetKit/**
+      - fastlane/metadata/en-US/**
+  workflow_dispatch:
+
+# One release at a time. A push made while one runs waits, and only the newest waiting push runs.
+concurrency:
+  group: play-store-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: vars.PLAY_STORE_RELEASE == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: play-store
+    env:
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      FASTLANE_SKIP_DOCS: "1"
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Test BedJetKit and the app
+        working-directory: android
+        run: ./gradlew :bedjetkit:test :app:testDebugUnitTest
+
+      - name: Build, upload and release
+        run: |
+          printf '%s' "$PLAY_UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          bundle exec fastlane android release
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
+          LULL_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
+          LULL_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
+          LULL_UPLOAD_KEY_ALIAS: upload
+          LULL_UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
+          PLAY_RELEASE_STATUS: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}

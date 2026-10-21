@@ -27,6 +27,7 @@ class StoreScreenshots {
     @Test
     fun captureListingScreens() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("storeShots") == "true")
+        cleanStatusBar()
         // A night that is already a few hours in shows more than one that has just begun.
         launchLull(ephemeral = true, demoElapsedMinutes = 200, demoLabelConnected = true).use {
             compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
@@ -58,5 +59,22 @@ class StoreScreenshots {
             Thread.sleep(2000)
             compose.capture("05-running", "store")
         }
+        shell("am broadcast -a com.android.systemui.demo -e command exit")
+    }
+
+    /** A 9:41 clock, full signal and battery, no notifications: the same status bar as the App Store shots. */
+    private fun cleanStatusBar() {
+        shell("settings put global sysui_demo_allowed 1")
+        val demo = "am broadcast -a com.android.systemui.demo -e command"
+        shell("$demo enter")
+        shell("$demo clock -e hhmm 0941")
+        shell("$demo battery -e level 100 -e plugged false")
+        shell("$demo network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4")
+        shell("$demo notifications -e visible false")
+    }
+
+    private fun shell(command: String) {
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
+        Thread.sleep(200)
     }
 }

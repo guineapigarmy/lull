@@ -1,1 +1,9 @@
-Bug fixes and improvements.
+Lull now works with the BedJet V2.
+
+• Use the Remote to switch between Cool, Heat and Turbo, and to set fan speed, heat temperature and the shut-off timer.
+• Tonight's schedule is saved to your BedJet V2 and runs on it, so your phone can sleep too.
+• Schedules can use Cool, Heat, Turbo and Pause. Gentle heat and Dry are BedJet 3 only.
+
+Also new:
+• History: see what your BedJet did each night and every change you made, so you can tell in the morning what helped.
+• If Lull can't find your BedJet, it now tells you what to check.

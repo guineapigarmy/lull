@@ -42,6 +42,8 @@ final class AppModel {
     var useFahrenheit: Bool { didSet { UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit") } }
     var demoMode: Bool { didSet { UserDefaults.standard.set(demoMode, forKey: "demoMode"); reconnect() } }
 
+    /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
+    private(set) var isSlowToFind = false
     private(set) var isBusy = false
     var errorMessage: String?
     /// Set when every slot on the BedJet is taken and the user has to pick one to reuse.
@@ -51,6 +53,7 @@ final class AppModel {
     private var lastRefresh = Date.distantPast
     private var keepsLongestRuntime = true
     private var isLoaded = false
+    private var searchTimer: Task<Void, Never>?
 
     var tonight: Schedule? { schedules.first { $0.id == tonightID } ?? schedules.first }
     var isConnected: Bool { linkState == .ready }
@@ -94,6 +97,31 @@ final class AppModel {
         linkState = link.state
         lastRefresh = .distantPast
         link.start()
+        restartSearchTimer()
+    }
+
+    private func restartSearchTimer() {
+        searchTimer?.cancel()
+        searchTimer = nil
+        isSlowToFind = false
+        timeSearch()
+    }
+
+    /// Counts how long Lull has been looking, across searching and connecting, but not while
+    /// another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
+    private func timeSearch() {
+        guard !demoMode, linkState == .searching || linkState == .connecting else {
+            searchTimer?.cancel()
+            searchTimer = nil
+            isSlowToFind = false
+            return
+        }
+        guard searchTimer == nil else { return }
+        searchTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.isSlowToFind = true
+        }
     }
 
     /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
@@ -105,6 +133,7 @@ final class AppModel {
 
     func appBecameActive() {
         link?.start()
+        restartSearchTimer()
     }
 
     func forgetDevice() {
@@ -114,6 +143,7 @@ final class AppModel {
 
     private func linkStateChanged(_ state: LinkState) {
         linkState = state
+        timeSearch()
         guard state == .ready, let link else { return }
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it

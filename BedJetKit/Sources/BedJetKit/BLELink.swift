@@ -35,6 +35,9 @@ public final class BLELink: NSObject, BedJetLink {
     private static let courtesy: TimeInterval = 10
     /// How long a request is advertised. Shorter than `courtesy`, so one request is answered once.
     private static let requestDuration: TimeInterval = 8
+    /// How long a unit gets to accept a connection before Lull scans for any BedJet instead.
+    /// Longer than `requestDuration`, so another phone has time to hand the unit over.
+    private static let connectPatience: TimeInterval = 12
 
     private var central: CBCentralManager?
     private var requester: CBPeripheralManager?
@@ -50,6 +53,8 @@ public final class BLELink: NSObject, BedJetLink {
     private var radioOnAfter: TimeInterval = 0
     private var servicesAfter: TimeInterval = 0
     private var foundByScan = false
+    private var skipsRememberedUnit = false
+    private var connectGeneration = 0
 
     private var statusCharacteristic: CBCharacteristic?
     private var lastHead: Data?
@@ -71,6 +76,7 @@ public final class BLELink: NSObject, BedJetLink {
         stopRequesting()
         central?.stopScan()
         yieldedUntil = .distantPast
+        skipsRememberedUnit = false
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
         if state != .ready {
             // Nothing is connected, so no disconnect will arrive to tidy up.
@@ -81,7 +87,8 @@ public final class BLELink: NSObject, BedJetLink {
 
     public func requestControl() {
         wantsConnection = true
-        if state == .yielded {
+        let wasYielded = state == .yielded
+        if wasYielded {
             yieldedUntil = .distantPast
             state = .searching
         }
@@ -92,6 +99,8 @@ public final class BLELink: NSObject, BedJetLink {
         if central == nil {
             central = CBCentralManager(delegate: self, queue: .main)
         } else {
+            // A phone that handed over may have been waiting on the unit for a long time. Now somebody is waiting too.
+            if wasYielded, let peripheral { expectAnswer(from: peripheral) }
             connectIfPossible()
         }
         guard state != .ready, let request = handoffUUID else { return }
@@ -139,7 +148,8 @@ public final class BLELink: NSObject, BedJetLink {
     private func connectIfPossible() {
         guard wantsConnection, let central, central.state == .poweredOn, peripheral == nil else { return }
         if state == .yielded, Date() < yieldedUntil { return }
-        if let remembered = UserDefaults.standard.string(forKey: Self.rememberedKey).flatMap(UUID.init),
+        if !skipsRememberedUnit,
+           let remembered = UserDefaults.standard.string(forKey: Self.rememberedKey).flatMap(UUID.init),
            let known = central.retrievePeripherals(withIdentifiers: [remembered]).first {
             // Going straight to the unit this phone already knows is several times quicker than scanning for it.
             foundByScan = false
@@ -159,6 +169,26 @@ public final class BLELink: NSObject, BedJetLink {
         // whenever the BedJet becomes free again.
         if state != .yielded { state = .connecting }
         central?.connect(target)
+        expectAnswer(from: target)
+    }
+
+    /// CoreBluetooth waits for a unit forever, and a remembered one that was replaced, reset or
+    /// moved away never answers. Give it a while, then look for any BedJet instead.
+    private func expectAnswer(from target: CBPeripheral) {
+        connectGeneration += 1
+        let generation = connectGeneration
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.connectPatience * 1_000_000_000))
+            guard let self, self.connectGeneration == generation, self.wantsConnection, self.peripheral === target,
+                  // A phone that handed over is meant to wait.
+                  self.state == .connecting || self.state == .searching, let central = self.central else { return }
+            central.cancelPeripheralConnection(target)
+            self.peripheral = nil
+            self.skipsRememberedUnit = true
+            self.foundByScan = true
+            self.state = .searching
+            central.scanForPeripherals(withServices: [Self.service])
+        }
     }
 
     private func dropConnection() {
@@ -332,6 +362,8 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
 
     public nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         MainActor.assumeIsolated {
+            connectGeneration += 1
+            skipsRememberedUnit = false
             UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Self.rememberedKey)
             linkUpAfter = askedAt.map { Date().timeIntervalSince($0) }
             peripheral.discoverServices([Self.service])
@@ -339,11 +371,18 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        MainActor.assumeIsolated { dropConnection() }
+        MainActor.assumeIsolated {
+            // A unit given up on may still report back; that attempt is already over.
+            guard peripheral === self.peripheral else { return }
+            dropConnection()
+        }
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        MainActor.assumeIsolated { dropConnection() }
+        MainActor.assumeIsolated {
+            guard peripheral === self.peripheral else { return }
+            dropConnection()
+        }
     }
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {

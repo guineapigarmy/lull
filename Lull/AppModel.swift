@@ -39,8 +39,20 @@ final class AppModel {
     /// The BedJet slot this app keeps tonight's schedule in.
     private(set) var slot: Int? { didSet { save() } }
 
+    /// What the BedJet did, oldest first, so the morning after can be checked against how the night felt.
+    private(set) var history: [HistoryEntry] = []
+    /// Keyed by `Night.id`.
+    var reviews: [String: NightReview] = [:] { didSet { saveHistory() } }
+    var nights: [Night] { Night.group(history) }
+
     var useFahrenheit: Bool { didSet { UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit") } }
-    var demoMode: Bool { didSet { UserDefaults.standard.set(demoMode, forKey: "demoMode"); reconnect() } }
+    var demoMode: Bool {
+        didSet {
+            UserDefaults.standard.set(demoMode, forKey: "demoMode")
+            loadHistory()
+            reconnect()
+        }
+    }
 
     /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
     private(set) var isSlowToFind = false
@@ -54,6 +66,14 @@ final class AppModel {
     private var keepsLongestRuntime = true
     private var isLoaded = false
     private var searchTimer: Task<Void, Never>?
+    /// What the history last recorded the BedJet doing, kept across launches to notice what changed while Lull was closed.
+    private var lastSeen: Seen?
+    /// The latest report, waiting to settle before it is compared with `lastSeen`.
+    private var observed: Seen?
+    private var settling: Task<Void, Never>?
+    private var connectedAt = Date.distantPast
+    private var lastCommandAt = Date.distantPast
+    private var isLoadingHistory = false
 
     var tonight: Schedule? { schedules.first { $0.id == tonightID } ?? schedules.first }
     var isConnected: Bool { linkState == .ready }
@@ -74,6 +94,7 @@ final class AppModel {
         #else
         demoMode = defaults.bool(forKey: "demoMode")
         #endif
+        loadHistory()
         load()
         reconnect()
     }
@@ -129,6 +150,9 @@ final class AppModel {
     /// relied on to hear another phone asking for the BedJet.
     func appMovedToBackground() {
         link?.stop()
+        // A change still settling would otherwise wait until Lull is opened again.
+        if settling != nil { commitObserved() }
+        saveHistory()
     }
 
     func appBecameActive() {
@@ -145,6 +169,7 @@ final class AppModel {
         linkState = state
         timeSearch()
         guard state == .ready, let link else { return }
+        connectedAt = Date()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
         // only needs re-reading now and then.
@@ -168,6 +193,7 @@ final class AppModel {
 
     private func statusChanged(_ status: DeviceStatus) {
         self.status = status
+        observe(status)
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
         let programStopped = status.mode == .standby && status.extra?.programStep == 0
@@ -176,7 +202,13 @@ final class AppModel {
         // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
         // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
         let minutesEarly = Int(run.endsAt.timeIntervalSinceNow / 60)
-        if !isBusy, minutesEarly > 2 {
+        guard !isBusy else { return }
+        if minutesEarly > 2 {
+            record(.scheduleEnded(name: run.schedule.name, ending: .early(minutes: minutesEarly)), noticedLater: isJustConnected)
+        } else {
+            record(.scheduleEnded(name: run.schedule.name, ending: .finished), at: min(run.endsAt, Date()))
+        }
+        if minutesEarly > 2 {
             errorMessage = "Your BedJet turned off \(Format.duration(minutesEarly)) before tonight's schedule ended "
                 + "(BedJet reason \(status.lastShutdownReason))."
         }
@@ -210,6 +242,7 @@ final class AppModel {
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
             self.run = ActiveRun(schedule: schedule, startedAt: Date())
+            self.record(.scheduleStarted(name: schedule.name))
             if let demo = link as? DemoLink, Self.demoElapsedMinutes > 0 {
                 demo.skipAhead(minutes: Self.demoElapsedMinutes)
                 self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-Self.demoElapsedMinutes * 60))
@@ -244,9 +277,11 @@ final class AppModel {
 
     func endNight() async {
         guard let link else { return }
+        let name = run?.schedule.name
         await perform {
             try await link.setMode(.standby)
             self.run = nil
+            self.record(.scheduleEnded(name: name, ending: .byYou))
         }
     }
 
@@ -254,9 +289,12 @@ final class AppModel {
 
     func setMode(_ mode: Mode) async {
         guard let link else { return }
+        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
+        let endingSchedule = run?.schedule.name
         await perform {
             try await link.setMode(mode)
             self.run = nil
+            if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
             self.keepsLongestRuntime = true
             try await self.extendRuntime(entering: mode)
         }
@@ -315,7 +353,10 @@ final class AppModel {
 
     private func perform(_ work: () async throws -> Void) async {
         isBusy = true
-        defer { isBusy = false }
+        defer {
+            isBusy = false
+            lastCommandAt = Date()
+        }
         do {
             try await takeControl()
             try await work()
@@ -352,6 +393,136 @@ final class AppModel {
         let file = URL.documentsDirectory.appending(path: "connections.txt")
         let existing = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         try? (existing + Date().formatted(date: .omitted, time: .standard) + " " + line).write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: History
+
+    /// The settings worth remembering from a status report. The timer is carried along to tell when it ran out.
+    private struct Seen: Codable, Equatable {
+        var mode: Mode
+        var temperature: Int
+        var fanPercent: Int
+        var programStep: Int
+        var remainingSeconds: Int
+        var at: Date
+
+        init(_ status: DeviceStatus, programStep: Int) {
+            mode = status.mode
+            temperature = status.targetTemperature
+            fanPercent = status.fanPercent
+            self.programStep = programStep
+            remainingSeconds = status.remainingSeconds
+            at = Date()
+        }
+
+        func sameSettings(as other: Seen) -> Bool {
+            mode == other.mode && fanPercent == other.fanPercent && programStep == other.programStep
+                && (!mode.usesTemperature || temperature == other.temperature)
+        }
+    }
+
+    /// The first reports after connecting describe the BedJet as it was left, not something that just happened.
+    private var isJustConnected: Bool { Date().timeIntervalSince(connectedAt) < 10 }
+
+    /// Waits for the BedJet to hold a setting for a few seconds, so dragging a slider is one entry, not twenty.
+    private func observe(_ status: DeviceStatus) {
+        // Whether a schedule is running arrives in the second half of the report; without it a phase
+        // change can't be told from a change someone made.
+        guard let step = status.extra?.programStep else { return }
+        let seen = Seen(status, programStep: step)
+        let isNew = observed.map { !seen.sameSettings(as: $0) } ?? true
+        observed = seen
+        if let lastSeen, seen.sameSettings(as: lastSeen) {
+            settling?.cancel()
+            settling = nil
+            self.lastSeen = seen
+            return
+        }
+        guard isNew || settling == nil else { return }
+        settling?.cancel()
+        settling = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.commitObserved()
+        }
+    }
+
+    private func commitObserved() {
+        settling?.cancel()
+        settling = nil
+        guard let now = observed else { return }
+        // The first report ever only sets where the history starts from.
+        guard let before = lastSeen else {
+            lastSeen = now
+            return
+        }
+        lastSeen = now
+        let wasAway = before.at < connectedAt && isJustConnected
+        switch (before.programStep, now.programStep) {
+        case (0, 1...):
+            // Started from this phone, it is recorded once the BedJet confirms it.
+            if run == nil, !isBusy { record(.scheduleStarted(name: nil), noticedLater: wasAway) }
+            return
+        // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.
+        case (1..., 1...) where before.programStep != now.programStep: return
+        case (1..., 0) where now.mode == .standby: return
+        default: break
+        }
+        if now.mode == .standby {
+            guard before.mode != .standby else { return }
+            let timerEnds = before.at.addingTimeInterval(TimeInterval(before.remainingSeconds))
+            let ranOut = lastCommandAt < before.at && (before.remainingSeconds < 120 || (wasAway && timerEnds < Date()))
+            record(.off(timerRanOut: ranOut), at: ranOut ? min(timerEnds, Date()) : Date(), noticedLater: wasAway && !ranOut)
+        } else {
+            record(.air(mode: now.mode, temperature: now.temperature, fanPercent: now.fanPercent), noticedLater: wasAway)
+        }
+    }
+
+    private func record(_ event: HistoryEntry.Event, at date: Date = Date(), noticedLater: Bool = false) {
+        history.append(HistoryEntry(date: date, event: event, room: status?.ambientTemperature, noticedLater: noticedLater))
+        if let previous = history.dropLast().last, previous.date > date { history.sort { $0.date < $1.date } }
+        // Two months is plenty to compare one season's nights with the next.
+        let cutoff = Date().addingTimeInterval(-60 * 86400)
+        history.removeAll { $0.date < cutoff }
+        saveHistory()
+    }
+
+    func review(of night: Night) -> NightReview {
+        reviews[night.id] ?? NightReview()
+    }
+
+    func setReview(_ review: NightReview, of night: Night) {
+        reviews[night.id] = review.isEmpty ? nil : review
+    }
+
+    private struct SavedHistory: Codable {
+        var entries: [HistoryEntry]
+        var reviews: [String: NightReview]
+        var lastSeen: Seen?
+    }
+
+    /// Demo mode keeps its own history, so pretend nights never mix with real ones.
+    private var historyFile: URL {
+        URL.applicationSupportDirectory.appending(path: demoMode ? "history-demo.json" : "history.json")
+    }
+
+    private func loadHistory() {
+        settling?.cancel()
+        settling = nil
+        observed = nil
+        let saved = Self.isEphemeral ? nil : (try? Data(contentsOf: historyFile)).flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
+        isLoadingHistory = true
+        history = saved?.entries ?? []
+        reviews = saved?.reviews ?? [:]
+        lastSeen = saved?.lastSeen
+        isLoadingHistory = false
+    }
+
+    private func saveHistory() {
+        guard !isLoadingHistory, !Self.isEphemeral else { return }
+        let saved = SavedHistory(entries: history, reviews: reviews, lastSeen: lastSeen)
+        try? FileManager.default.createDirectory(at: historyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(saved).write(to: historyFile, options: .atomic)
     }
 
     // MARK: Schedules
@@ -395,6 +566,9 @@ final class AppModel {
             schedules = saved.schedules
             tonightID = saved.tonightID
             run = saved.run.flatMap { $0.endsAt > Date() ? $0 : nil }
+            if let ended = saved.run, run == nil {
+                record(.scheduleEnded(name: ended.schedule.name, ending: .finished), at: ended.endsAt)
+            }
             slot = saved.slot
         } else {
             schedules = Schedule.templates

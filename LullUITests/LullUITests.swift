@@ -78,6 +78,48 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Use Warm Welcome tonight"].waitForExistence(timeout: 5))
     }
 
+    func testHistoryKeepsTheNight() {
+        app.tabBars.buttons["History"].tap()
+        XCTAssertTrue(app.staticTexts["No nights yet"].waitForExistence(timeout: 10))
+
+        app.tabBars.buttons["Remote"].tap()
+        let heat = app.buttons["Heat"]
+        XCTAssertTrue(heat.waitForExistence(timeout: 10))
+        sleep(2)
+        heat.tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
+        // A setting is recorded once the BedJet has held it for a few seconds.
+        sleep(4)
+        app.buttons["Off"].tap()
+        sleep(4)
+
+        // A schedule's phases are its own; only its start and end are recorded.
+        app.tabBars.buttons["Schedule"].tap()
+        let start = app.buttons["Start Night"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        start.tap()
+        let end = app.buttons["End Night"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        sleep(4)
+        end.tap()
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        sleep(4)
+
+        app.tabBars.buttons["History"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat ·'")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Turned off"].exists)
+        XCTAssertTrue(app.staticTexts["Started Cool Drift"].exists)
+        XCTAssertTrue(app.staticTexts["Ended Cool Drift"].exists)
+        // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool ·'")).count, 0)
+
+        let sleptWell = app.buttons["Slept well"]
+        sleptWell.tap()
+        XCTAssertTrue(sleptWell.isSelected)
+        sleep(1)
+        capture("history")
+    }
+
     func testRemoteAndDevice() {
         let heat = app.buttons["Heat"]
         XCTAssertTrue(heat.waitForExistence(timeout: 10))

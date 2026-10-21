@@ -12,6 +12,8 @@ the night keeps going.
   its own temperature, fan speed and duration, and see the whole curve at a glance.
 - **Runs on the device**: tonight's schedule is written into one of the BedJet's three program slots.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
+- **History**: every change through the night, with the time and room temperature, and a thumbs up or
+  down and a note for each night, so the morning after you can see what worked.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.

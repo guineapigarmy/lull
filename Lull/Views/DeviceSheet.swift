@@ -18,7 +18,7 @@ struct DeviceSheet: View {
 
                 if model.isSlowToFind {
                     Section {
-                        Label("Lull works with BedJet 3 and BedJet V2.", systemImage: "bed.double")
+                        Label("Lull works with BedJet 3 and BedJet V2. The original BedJet isn't supported.", systemImage: "bed.double")
                         Label("Force-quit the BedJet app: swipe up from the bottom of the screen, then swipe the app away.", systemImage: "xmark.app")
                         Label("Close the BedJet app on any other phone or tablet nearby.", systemImage: "iphone")
                         Label("Unplug the BedJet for 10 seconds, then plug it back in.", systemImage: "powerplug")

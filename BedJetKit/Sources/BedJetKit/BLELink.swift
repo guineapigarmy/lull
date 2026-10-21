@@ -205,7 +205,7 @@ public final class BLELink: NSObject, BedJetLink {
             self.skipsRememberedUnit = true
             self.foundByScan = true
             self.state = .searching
-            // Unfiltered, like any other search, so a BedJet V2 can be found too.
+            // Unfiltered, like the first scan, so a V2 can be found by its name.
             central.scanForPeripherals(withServices: nil)
         }
     }

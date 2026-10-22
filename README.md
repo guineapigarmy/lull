@@ -15,6 +15,9 @@ the night keeps going.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
+- **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in
+  StandBy, last night at a glance, and Start Night in Control Center and Siri. Widgets read what the app
+  last saved, so they work while the phone is away from the BedJet.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.
@@ -25,10 +28,12 @@ the night keeps going.
 
 | Path | What it is |
 | --- | --- |
-| `Lull/` | The SwiftUI app (model, schedules, views, theme) |
+| `Lull/` | The SwiftUI app (model and views) |
+| `Shared/` | Code the app and widgets both build: schedules, history, theme, the night curve, the data handed to widgets, and the app intents |
+| `LullWidgets/` | The widget extension: Tonight and Last Night widgets, and the Start Night and Remote controls |
 | `BedJetKit/` | Swift package: the BedJet 3 and V2 Bluetooth protocols, a CoreBluetooth transport, and a simulated BedJet 3 |
 | `BedJetKit/Sources/bedjetctl` | A read-only command-line tool that prints a real BedJet's status and saved programs |
-| `LullUITests/` | UI tests that walk the main flows against the simulated BedJet |
+| `LullUITests/` | UI tests that walk the main flows against the simulated BedJet, and put the widgets on the Home and Lock Screens |
 | `docs/BEDJET_V2_PROTOCOL.md` | The BedJet V2 protocol, how it was worked out, and what is still unconfirmed |
 | `screenshots/`, `app-store-screenshots/` | Marketing and App Store screenshots |
 
@@ -43,7 +48,9 @@ open Lull.xcodeproj
 ```
 
 In Xcode, select the **Lull** target, open **Signing & Capabilities**, choose your own team, and change
-the bundle identifier to something unique (for example `com.yourname.lull`). Then run.
+the bundle identifier to something unique (for example `com.yourname.lull`). Do the same for the
+**LullWidgets** target (`com.yourname.lull.widgets`), and on both targets replace the App Group with one of
+your own, matching `WidgetSnapshot.appGroup` in `Shared/WidgetSnapshot.swift`. Then run.
 
 **No BedJet? No problem.** The iOS Simulator has no Bluetooth, so the app uses a simulated BedJet
 (`DemoLink`) that speaks the same bytes as the real one. You can also turn on Demo mode on a device.

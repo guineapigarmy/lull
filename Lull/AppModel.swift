@@ -1,27 +1,7 @@
 import BedJetKit
 import Foundation
 import Observation
-
-/// A schedule that is running on the BedJet right now.
-struct ActiveRun: Codable, Equatable {
-    var schedule: Schedule
-    var startedAt: Date
-
-    var endsAt: Date { startedAt.addingTimeInterval(TimeInterval(schedule.totalMinutes * 60)) }
-
-    func progress(at date: Date) -> Double {
-        min(max(date.timeIntervalSince(startedAt) / max(endsAt.timeIntervalSince(startedAt), 1), 0), 1)
-    }
-
-    func phase(at date: Date) -> (phase: Phase, index: Int, minutesLeft: Int)? {
-        var elapsed = Int(date.timeIntervalSince(startedAt) / 60)
-        for (index, phase) in schedule.phases.enumerated() {
-            if elapsed < phase.minutes { return (phase, index, phase.minutes - elapsed) }
-            elapsed -= phase.minutes
-        }
-        return nil
-    }
-}
+import WidgetKit
 
 @MainActor
 @Observable
@@ -32,7 +12,10 @@ final class AppModel {
     private(set) var firmware: String?
     /// The kind of BedJet last connected, remembered so schedules can be edited for it while it is away.
     private(set) var generation: Generation {
-        didSet { UserDefaults.standard.set(generation.rawValue, forKey: "generation") }
+        didSet {
+            UserDefaults.standard.set(generation.rawValue, forKey: "generation")
+            publishWidgets()
+        }
     }
     /// What is saved in the BedJet's three program slots.
     private(set) var deviceSlots: [StoredProgram?] = []
@@ -47,7 +30,12 @@ final class AppModel {
     private(set) var history: [HistoryEntry] = []
     var nights: [Night] { Night.group(history) }
 
-    var useFahrenheit: Bool { didSet { UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit") } }
+    var useFahrenheit: Bool {
+        didSet {
+            UserDefaults.standard.set(useFahrenheit, forKey: "useFahrenheit")
+            publishWidgets()
+        }
+    }
     var demoMode: Bool {
         didSet {
             UserDefaults.standard.set(demoMode, forKey: "demoMode")
@@ -514,9 +502,11 @@ final class AppModel {
         let saved = Self.isEphemeral ? nil : (try? Data(contentsOf: historyFile)).flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
         history = saved?.entries ?? (Self.seedsDemoHistory ? HistoryEntry.samples() : [])
         lastSeen = saved?.lastSeen
+        publishWidgets()
     }
 
     private func saveHistory() {
+        publishWidgets()
         guard !Self.isEphemeral else { return }
         let saved = SavedHistory(entries: history, lastSeen: lastSeen)
         try? FileManager.default.createDirectory(at: historyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -590,12 +580,33 @@ final class AppModel {
             tonightID = schedules.first?.id
         }
         isLoaded = true
+        publishWidgets()
     }
 
     private func save() {
-        guard isLoaded, !Self.isEphemeral else { return }
+        guard isLoaded else { return }
+        publishWidgets()
+        guard !Self.isEphemeral else { return }
         let saved = Saved(schedules: schedules, tonightID: tonightID, run: run, slot: slot)
         try? FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(saved).write(to: Self.file, options: .atomic)
+    }
+
+    // MARK: Widgets
+
+    /// Hands the widgets what they show, and redraws them when it changed. Widgets can't reach the BedJet,
+    /// so this is all they know until Lull is opened again.
+    private func publishWidgets() {
+        guard isLoaded else { return }
+        let snapshot = WidgetSnapshot(
+            tonight: tonight,
+            run: run,
+            recentHistory: WidgetSnapshot.recent(history),
+            useFahrenheit: useFahrenheit,
+            generation: generation
+        )
+        guard snapshot.save() else { return }
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
     }
 }

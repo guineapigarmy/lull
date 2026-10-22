@@ -20,8 +20,10 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 1. Fork the repository and clone your fork.
 2. Open `Lull.xcodeproj` in Xcode 16 or later.
-3. In **Signing & Capabilities**, pick your own team and change the bundle identifiers of the `Lull`
-   and `LullUITests` targets to something unique. Please don't commit these signing changes.
+3. In **Signing & Capabilities**, pick your own team and change the bundle identifiers of the `Lull`,
+   `LullWidgets` and `LullUITests` targets to something unique. The app and widgets share an App Group:
+   swap it for your own on both targets and in `WidgetSnapshot.appGroup`. Please don't commit these
+   signing changes.
 4. Run on the iOS Simulator. It uses the simulated BedJet (`DemoLink`), so you don't need hardware.
 
 ## Making a change

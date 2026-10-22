@@ -2,16 +2,21 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @State private var selectedTab = 0
+    @State private var selectedTab = LullTab.remote
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var model = model
         TabView(selection: $selectedTab) {
-            Tab("Remote", systemImage: "dial.medium.fill", value: 0) { RemoteView() }
-            Tab("Schedule", systemImage: "moon.stars.fill", value: 1) { ScheduleView() }
-            Tab("History", systemImage: "clock.arrow.circlepath", value: 2) { HistoryView() }
+            Tab("Remote", systemImage: "dial.medium.fill", value: LullTab.remote) { RemoteView() }
+            Tab("Schedule", systemImage: "moon.stars.fill", value: LullTab.schedule) { ScheduleView() }
+            Tab("History", systemImage: "clock.arrow.circlepath", value: LullTab.history) { HistoryView() }
         }
+        // Widgets open the tab they show; controls and Shortcuts send commands.
+        .onOpenURL { url in
+            if let tab = LullTab(url: url) { selectedTab = tab }
+        }
+        .onAppear { AppCommands.handler = handle }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: model.appMovedToBackground()
@@ -49,6 +54,18 @@ struct RootView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Lull keeps tonight's schedule in one slot on the BedJet. Pick one to reuse. Everything on the BedJet is already copied into your schedules.")
+        }
+    }
+
+    private func handle(_ command: AppCommands.Command) {
+        switch command {
+        case let .show(tab):
+            selectedTab = tab
+        case .startNight:
+            selectedTab = .schedule
+            // A night already under way, from this phone or another, is left running and shown.
+            guard model.run == nil, model.runningElsewhereStep == nil, !model.isBusy else { return }
+            Task { await model.startTonight() }
         }
     }
 

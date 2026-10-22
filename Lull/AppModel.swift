@@ -176,6 +176,15 @@ final class AppModel {
         "\(Format.degrees(halfCelsius, fahrenheit: useFahrenheit))°"
     }
 
+    /// A phase in words for VoiceOver, such as "Heat, 75°, fan 40%, 30 minutes".
+    func spokenSummary(of phase: Phase) -> String {
+        var parts = [phase.mode.title]
+        if bedJet.adjustsTemperature(phase.mode) { parts.append(degrees(phase.temperature)) }
+        if phase.mode.usesFan { parts.append("fan \(phase.fanPercent)%") }
+        parts.append(Format.spokenDuration(phase.minutes))
+        return parts.joined(separator: ", ")
+    }
+
     // MARK: Persistence
 
     /// The BedJets known in one mode. Demo mode keeps its own, so pretend units never mix with real ones.

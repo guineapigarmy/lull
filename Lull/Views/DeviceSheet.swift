@@ -46,6 +46,7 @@ struct DeviceSheet: View {
                         ForEach(Array(bedJet.deviceSlots.enumerated()), id: \.offset) { index, program in
                             LabeledContent("Slot \(index + 1)") {
                                 Text(index == bedJet.slot ? "Lull · \(program?.name ?? "Empty")" : program?.name ?? "Empty")
+                                    .accessibilityLabel(index == bedJet.slot ? "Used by Lull, \(program?.name ?? "empty")" : program?.name ?? "Empty")
                             }
                         }
                     } header: {
@@ -65,8 +66,8 @@ struct DeviceSheet: View {
 
                 Section("App") {
                     Picker("Temperature", selection: $model.useFahrenheit) {
-                        Text("°F").tag(true)
-                        Text("°C").tag(false)
+                        Text("°F").tag(true).accessibilityLabel("Fahrenheit")
+                        Text("°C").tag(false).accessibilityLabel("Celsius")
                     }
                     Toggle("Demo mode", isOn: $model.demoMode)
                     if !model.demoMode || model.hasSeveralBedJets {

@@ -22,12 +22,13 @@ struct RemoteView: View {
 
             if bedJet.linkState == .yielded {
                 Text("In use on another phone. Touch a control to take over.")
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity)
             }
 
-            ModePicker(modes: bedJet.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
+            ModePicker(modes: bedJet.remoteModes + [.standby], selection: chosenMode ?? status?.mode,
+                       hint: bedJet.run != nil ? "Ends the schedule that's running" : nil) { mode in
                 chosenMode = mode
                 Task {
                     await bedJet.setMode(mode)
@@ -48,18 +49,16 @@ struct RemoteView: View {
                         }, range: 5...100, step: 5, tint: mode.tint)
                         if bedJet.run == nil {
                             let limit = runtimeLimit(status)
-                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)), value: sending($runtime, "runtime") {
+                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)),
+                                          spokenValue: Format.spokenDuration(Int(runtime)), value: sending($runtime, "runtime") {
                                 await bedJet.setRuntime(minutes: Int(runtime))
                             }, range: limit.range, step: limit.step)
                         } else {
                             // A schedule sets its own timing, so this is read-only until it ends.
-                            HStack {
-                                Text("Phase ends in").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.secondary)
-                                Spacer()
-                                Text(Format.duration(minutesLeft(status)))
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .monospacedDigit()
-                            }
+                            ValueHeader(title: "Phase ends in", value: Format.duration(minutesLeft(status)))
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("Phase ends in")
+                                .accessibilityValue(Format.spokenDuration(minutesLeft(status)))
                         }
                     }
                 }
@@ -67,7 +66,7 @@ struct RemoteView: View {
             }
             if bedJet.run != nil {
                 Text("Choosing a mode here ends the schedule that's running.")
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity)
             }
@@ -123,6 +122,8 @@ struct RemoteView: View {
 struct ClimateOrb: View {
     @Environment(AppModel.self) private var model
     let status: DeviceStatus?
+    /// Grows with the text inside it, up to what fits across a phone.
+    @ScaledMetric(relativeTo: .largeTitle) private var diameter: CGFloat = 204
 
     var body: some View {
         let mode = status?.mode ?? .standby
@@ -139,27 +140,46 @@ struct ClimateOrb: View {
                 .padding(8)
             VStack(spacing: 4) {
                 if let status {
-                    Eyebrow(mode.activity)
+                    // White, unlike other labels, so it stays readable over the glow.
+                    Eyebrow(mode.activity, color: .white)
                     Text(isOn && model.bedJet.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
-                        .font(.system(size: 60, weight: .thin))
+                        .scaledFont(60, .light)
                         .monospacedDigit()
                         .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
                     Text(isOn ? "Fan \(status.fanPercent)% · Air \(model.degrees(status.actualTemperature))"
                               : "Room \(model.degrees(status.ambientTemperature))")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.secondary)
+                        .scaledFont(15, .medium)
+                        .foregroundStyle(.white)
                         .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.7)
                 } else {
                     ProgressView()
                     Text(model.hasSeveralBedJets ? "Looking for \(model.title(of: model.bedJet))" : "Looking for your BedJet")
-                        .font(.system(size: 15, weight: .medium))
+                        .scaledFont(15, .medium)
                         .foregroundStyle(Theme.secondary)
+                        .multilineTextAlignment(.center)
                         .padding(.top, 8)
                 }
             }
+            .padding(.horizontal, 28)
         }
-        .frame(width: 204, height: 204)
+        .frame(width: min(diameter, 320), height: min(diameter, 320))
         .animation(.smooth(duration: 0.6), value: mode)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenStatus)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var spokenStatus: String {
+        guard let status else { return "Looking for your BedJet" }
+        guard status.isRunning else { return "Off, room \(model.degrees(status.ambientTemperature))" }
+        var parts = [status.mode.activity]
+        if model.bedJet.adjustsTemperature(status.mode) { parts.append("set to \(model.degrees(status.targetTemperature))") }
+        parts.append("fan \(status.fanPercent)%")
+        parts.append("air \(model.degrees(status.actualTemperature))")
+        return parts.joined(separator: ", ")
     }
 }

@@ -166,6 +166,18 @@ enum Format {
         return rest == 0 ? "\(hours) hr" : "\(hours) hr \(rest) min"
     }
 
+    /// A duration in words, for VoiceOver: "2 hours, 30 minutes" rather than "2 hr 30 min".
+    static func spokenDuration(_ minutes: Int) -> String {
+        spoken.string(from: TimeInterval(minutes * 60)) ?? duration(minutes)
+    }
+
+    private static let spoken: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
     static func degrees(_ halfCelsius: Int, fahrenheit: Bool) -> Int {
         let celsius = Double(halfCelsius) / 2
         return Int((fahrenheit ? celsius * 9 / 5 + 32 : celsius).rounded())

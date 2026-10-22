@@ -4,11 +4,11 @@ import SwiftUI
 /// Plan the night and run it: tonight's schedule on top, the rest of the library below.
 struct ScheduleView: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     @State private var editing: Schedule?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let bedJet = model.bedJet
         Screen(title: "Schedule", subtitle: Date().formatted(.dateTime.weekday(.wide).month().day())) {
             if let run = bedJet.run {
                 TimelineView(.periodic(from: .now, by: 30)) { timeline in
@@ -45,7 +45,7 @@ struct ScheduleView: View {
 
     /// The schedule shown in the large card: the one running, otherwise the one picked for tonight.
     private var featuredID: Schedule.ID? {
-        model.bedJet.run?.schedule.id ?? model.bedJet.tonight?.id
+        bedJet.run?.schedule.id ?? bedJet.tonight?.id
     }
 
     private func planned(_ schedule: Schedule) -> some View {
@@ -72,15 +72,21 @@ struct ScheduleView: View {
                         .accessibilityAction(named: "Duplicate") { duplicate(schedule) }
                 }
                 NightTimeline(schedule: schedule, startMinute: minuteOfDay(Date()))
+                let problem = bedJet.problem(running: schedule)
+                if let problem {
+                    Label(problem, systemImage: "exclamationmark.triangle")
+                        .scaledFont(13)
+                        .foregroundStyle(Theme.secondary)
+                }
                 Button {
-                    Task { await model.bedJet.startTonight() }
+                    Task { await bedJet.startTonight() }
                 } label: {
-                    if model.bedJet.isBusy { ProgressView().tint(.black) } else { Text("Start Night") }
+                    if bedJet.isBusy { ProgressView().tint(.black) } else { Text("Start Night") }
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .accessibilityLabel("Start Night")
-                .accessibilityValue(model.bedJet.isBusy ? "Starting" : "")
-                .disabled(!model.bedJet.canControl || model.bedJet.isBusy)
+                .accessibilityValue(bedJet.isBusy ? "Starting" : "")
+                .disabled(!bedJet.canControl || bedJet.isBusy || problem != nil)
 
                 Text(startHint)
                     .scaledFont(13)
@@ -93,7 +99,7 @@ struct ScheduleView: View {
     }
 
     private var startHint: String {
-        switch model.bedJet.linkState {
+        switch bedJet.linkState {
         case .ready: return "Saved to your BedJet, which runs it all night. Your phone can sleep too."
         case .yielded: return "Your BedJet is in use on another phone. Starting here takes over."
         default: return "Waiting for your BedJet. Keep your phone within a few feet of it."
@@ -107,7 +113,7 @@ struct ScheduleView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Eyebrow("Running now")
                     Text("Phase \(step)").scaledFont(26, .semibold).accessibilityAddTraits(.isHeader)
-                    if let status = model.bedJet.status {
+                    if let status = bedJet.status {
                         let minutes = max((status.remainingSeconds + 59) / 60, 1)
                         Label("\(status.mode.activity) · \(Format.duration(minutes)) left in this phase", systemImage: status.mode.symbol)
                             .scaledFont(15, .medium)
@@ -118,9 +124,9 @@ struct ScheduleView: View {
                         .scaledFont(13)
                         .foregroundStyle(Theme.tertiary)
                 }
-                Button("End Night") { Task { await model.bedJet.endNight() } }
+                Button("End Night") { Task { await bedJet.endNight() } }
                     .buttonStyle(PrimaryButtonStyle(prominent: false))
-                    .disabled(model.bedJet.isBusy)
+                    .disabled(bedJet.isBusy)
             }
         }
     }
@@ -140,16 +146,16 @@ struct ScheduleView: View {
                     }
                 }
                 NightTimeline(schedule: run.schedule, startMinute: minuteOfDay(run.startedAt), progress: run.progress(at: now))
-                Button("End Night") { Task { await model.bedJet.endNight() } }
+                Button("End Night") { Task { await bedJet.endNight() } }
                     .buttonStyle(PrimaryButtonStyle(prominent: false))
-                    .disabled(model.bedJet.isBusy)
+                    .disabled(bedJet.isBusy)
             }
         }
     }
 
     private func row(_ schedule: Schedule) -> some View {
         // Swapping schedules waits until the one that is running has ended.
-        let canSwap = model.bedJet.run == nil
+        let canSwap = bedJet.run == nil
         // At the largest text sizes Use Tonight goes under the card rather than over its corner.
         let beneath = typeSize.isAccessibilitySize
         return VStack(alignment: .trailing, spacing: 8) {
@@ -168,7 +174,7 @@ struct ScheduleView: View {
     }
 
     private func useTonight(_ schedule: Schedule) -> some View {
-        Button { model.bedJet.tonightID = schedule.id } label: {
+        Button { bedJet.tonightID = schedule.id } label: {
             Text("Use Tonight")
                 .scaledFont(13, .semibold)
                 .padding(.horizontal, 14)

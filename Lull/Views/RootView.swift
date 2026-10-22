@@ -7,11 +7,13 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
-        @Bindable var bedJet = model.bedJet
-        TabView(selection: $selectedTab) {
-            Tab("Remote", systemImage: "dial.medium.fill", value: LullTab.remote) { RemoteView() }
-            Tab("Schedule", systemImage: "moon.stars.fill", value: LullTab.schedule) { ScheduleView() }
-            Tab("History", systemImage: "clock.arrow.circlepath", value: LullTab.history) { HistoryView() }
+        Group {
+            if let bedJet = model.bedJet {
+                tabs(bedJet)
+            } else {
+                // Lull only ever controls a BedJet the person picked.
+                ChooseBedJetView()
+            }
         }
         // Widgets open the tab they show; controls and Shortcuts send commands.
         .onOpenURL { url in
@@ -25,13 +27,28 @@ struct RootView: View {
             default: break
             }
         }
-        // Remade for each BedJet, so switching to another isn't announced as its connection or night changing.
-        .background { Announcements(bedJet: bedJet).id(bedJet.id) }
+        .onChange(of: model.selectedID) { old, _ in
+            // Said once, when the person switches; scanning and background BedJets stay quiet.
+            guard old != nil, let bedJet = model.bedJet else { return }
+            announce("Showing \(model.title(of: bedJet)), \(bedJet.spokenConnectionLabel)")
+        }
         .alert("Something went wrong", isPresented: .init(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+
+    private func tabs(_ bedJet: BedJet) -> some View {
+        @Bindable var bedJet = bedJet
+        return TabView(selection: $selectedTab) {
+            Tab("Remote", systemImage: "dial.medium.fill", value: LullTab.remote) { RemoteView() }
+            Tab("Schedule", systemImage: "moon.stars.fill", value: LullTab.schedule) { ScheduleView() }
+            Tab("History", systemImage: "clock.arrow.circlepath", value: LullTab.history) { HistoryView() }
+        }
+        .environment(bedJet)
+        // Remade for each BedJet, so switching to another isn't announced as its connection or night changing.
+        .background { Announcements(bedJet: bedJet).id(bedJet.id) }
         .confirmationDialog("Your BedJet's three slots are full", isPresented: $bedJet.needsSlotChoice, titleVisibility: .visible) {
             ForEach(Array(bedJet.deviceSlots.enumerated()), id: \.offset) { index, program in
                 Button("Replace “\(program?.name ?? "Slot \(index + 1)")”") {
@@ -51,11 +68,14 @@ struct RootView: View {
         case .startNight:
             selectedTab = .schedule
             // A night already under way, from this phone or another, is left running and shown.
-            let bedJet = model.bedJet
-            guard bedJet.run == nil, bedJet.runningElsewhereStep == nil, !bedJet.isBusy else { return }
+            guard let bedJet = model.bedJet, bedJet.run == nil, bedJet.runningElsewhereStep == nil, !bedJet.isBusy else { return }
             Task { await bedJet.startTonight() }
         }
     }
+}
+
+func announce(_ message: String) {
+    AccessibilityNotification.Announcement(message).post()
 }
 
 /// Changes VoiceOver users would otherwise only notice by exploring the screen again.
@@ -82,17 +102,15 @@ private struct Announcements: View {
             }
     }
 
-    private func announce(_ message: String) {
-        AccessibilityNotification.Announcement(message).post()
-    }
 }
 
-/// Screen scaffold shared by the tabs: large title on the left, BedJet connection on the right.
+/// Screen scaffold shared by the tabs: large title on the left, the BedJet on screen and its connection on the right.
 struct Screen<Content: View>: View {
     let title: String
     var subtitle: String?
     @ViewBuilder var content: Content
     @State private var showsDevice = false
+    @State private var showsChooser = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -110,7 +128,7 @@ struct Screen<Content: View>: View {
                     // A long BedJet name wraps rather than the screen's title.
                     .layoutPriority(1)
                     Spacer(minLength: 0)
-                    ConnectionPill { showsDevice = true }
+                    ConnectionPill(showsSettings: $showsDevice, showsChooser: $showsChooser)
                 }
                 .padding(.top, 8)
                 content
@@ -121,51 +139,66 @@ struct Screen<Content: View>: View {
         .scrollIndicators(.hidden)
         .background(Theme.background)
         .sheet(isPresented: $showsDevice) { DeviceSheet() }
+        .sheet(isPresented: $showsChooser) {
+            NavigationStack {
+                NearbyBedJets().toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showsChooser = false } }
+                }
+            }
+        }
     }
 }
 
-/// Shows the BedJet's connection and opens its settings. With several BedJets it names the one on
-/// screen and switches between them.
+/// Names the BedJet on screen and says how its connection is going, in words as well as the dot. Opens its
+/// settings; with several BedJets it switches between them.
 struct ConnectionPill: View {
     @Environment(AppModel.self) private var model
-    let action: () -> Void
+    @Environment(BedJet.self) private var bedJet
+    // Bindings rather than closures, so the open menu isn't rebuilt each time the screen beneath it updates.
+    @Binding var showsSettings: Bool
+    @Binding var showsChooser: Bool
 
     var body: some View {
-        let bedJet = model.bedJet
+        let title = model.title(of: bedJet)
         if model.hasSeveralBedJets {
             Menu {
-                Picker("BedJets", selection: Binding(get: { model.bedJet.id }, set: { model.select($0) })) {
+                // Picking another is refused until then, so say why.
+                if !model.canSwitch { Text("Switching waits until the schedule finishes saving to \(title).") }
+                Picker("BedJets", selection: Binding(get: { bedJet.id }, set: { model.select($0) })) {
                     ForEach(model.bedJets) { bedJet in
                         Text(model.title(of: bedJet)).tag(bedJet.id)
                     }
                 }
                 .pickerStyle(.inline)
                 Section {
-                    Button("Add Another BedJet", systemImage: "plus") { model.addBedJet() }
-                    Button("BedJet Settings", systemImage: "gearshape") { action() }
+                    Button("Add Another BedJet", systemImage: "plus") { showsChooser = true }.disabled(!model.canSwitch)
+                    Button("BedJet Settings", systemImage: "gearshape") { showsSettings = true }
                 }
             } label: {
-                pill(model.title(of: bedJet), isConnected: bedJet.isConnected, switches: true)
+                pill(title, state: bedJet.connectionLabel, isConnected: bedJet.isConnected, switches: true)
             }
             .menuOrder(.fixed)
             .sensoryFeedback(.selection, trigger: bedJet.id)
-            .accessibilityLabel("BedJet, \(model.title(of: bedJet)), \(bedJet.spokenConnectionLabel)")
+            .accessibilityLabel("BedJet, \(title), \(bedJet.spokenConnectionLabel)")
             .accessibilityHint("Switches BedJet, adds another, or opens BedJet settings")
         } else {
-            Button(action: action) { pill(bedJet.connectionLabel, isConnected: bedJet.isConnected) }
+            Button { showsSettings = true } label: { pill(title, state: bedJet.connectionLabel, isConnected: bedJet.isConnected) }
                 .buttonStyle(.plain)
-                .accessibilityLabel("BedJet, \(bedJet.spokenConnectionLabel)")
+                .accessibilityLabel("BedJet, \(title), \(bedJet.spokenConnectionLabel)")
                 .accessibilityHint("Shows the connection, BedJet settings and help finding it")
         }
     }
 
-    private func pill(_ text: String, isConnected: Bool, switches: Bool = false) -> some View {
+    private func pill(_ title: String, state: String, isConnected: Bool, switches: Bool = false) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(isConnected ? Color.green : Theme.neutral)
                 .frame(width: 8, height: 8)
                 .symbolEffect(.pulse, isActive: !isConnected)
-            Text(text).scaledFont(13, .semibold)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).scaledFont(13, .semibold)
+                Text(state).scaledFont(12, .medium).foregroundStyle(Theme.secondary)
+            }
             if switches {
                 Image(systemName: "chevron.up.chevron.down")
                     .scaledFont(10, .bold)
@@ -175,7 +208,7 @@ struct ConnectionPill: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .frame(minHeight: 36)
+        .frame(minHeight: 44)
         .background(Theme.raised, in: Capsule())
         .overlay(Capsule().strokeBorder(Theme.hairline))
     }

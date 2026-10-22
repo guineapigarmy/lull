@@ -20,8 +20,10 @@ the night keeps going.
   last saved, so they work while the phone is away from the BedJet.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically.
-- **Several BedJets**: one on each side of the bed? Add both. They stay connected, each runs its own
-  night and keeps its own history, and the name at the top of every screen switches between them.
+- **Your BedJet, never a neighbour's**: you pick your BedJet from the ones nearby, and Lull only ever
+  connects to the units you picked. If yours is away, Lull says so rather than taking another.
+- **Several BedJets**: one on each side of the bed? Add both and give them nicknames. They stay connected,
+  each runs its own night and keeps its own history, and the name at the top of every screen switches between them.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.
 
 > Lull is an independent project and is not affiliated with or endorsed by BedJet LLC.

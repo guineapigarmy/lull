@@ -13,9 +13,13 @@ public final class DemoLink: BedJetLink {
     public nonisolated static let defaultName = "BEDJET-DEMO"
 
     public let name: String
+    /// False pretends the unit is switched off or out of range: it is looked for but never connects.
+    public var answers = true
     public private(set) var slots: [StoredProgram?]
     public private(set) var clock: (hour: Int, minute: Int)?
     public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
+    /// The step of the program running on the unit, connected or not; 0 when none is.
+    public var programStep: Int { status.extra?.programStep ?? 0 }
 
     private var status = DeviceStatus(
         remainingSeconds: 0, actualTemperature: 46, targetTemperature: 60, mode: .standby, fanStep: 7,
@@ -32,7 +36,7 @@ public final class DemoLink: BedJetLink {
     }
 
     public func start() {
-        guard timer == nil else { return }
+        guard timer == nil, answers else { return }
         state = .connecting
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }

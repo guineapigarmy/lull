@@ -6,17 +6,22 @@ struct DeviceSheet: View {
 
     var body: some View {
         @Bindable var model = model
+        let bedJet = model.bedJet
         NavigationStack {
             Form {
+                if model.hasSeveralBedJets { bedJets }
+
                 Section {
                     LabeledContent("Status", value: statusText)
-                    if let name = model.deviceName { LabeledContent("Name", value: name) }
-                    if let firmware = model.firmware { LabeledContent("Firmware", value: firmware) }
+                    if let name = bedJet.name { LabeledContent("Name", value: name) }
+                    if let firmware = bedJet.firmware { LabeledContent("Firmware", value: firmware) }
+                } header: {
+                    if model.hasSeveralBedJets { Text(model.title(of: bedJet)) }
                 } footer: {
                     Text(help)
                 }
 
-                if model.isSlowToFind {
+                if bedJet.isSlowToFind {
                     Section {
                         Label("Lull works with BedJet 3 and BedJet V2. The original BedJet isn't supported.", systemImage: "bed.double")
                         Label("Force-quit the BedJet app: swipe up from the bottom of the screen, then swipe the app away.", systemImage: "xmark.app")
@@ -29,19 +34,19 @@ struct DeviceSheet: View {
                     }
                 }
 
-                if model.isConnected, let extra = model.status?.extra {
+                if bedJet.isConnected, let extra = bedJet.status?.extra {
                     Section("BedJet") {
-                        Toggle("Light ring", isOn: .init(get: { extra.ledEnabled }, set: { on in Task { await model.setLED(on) } }))
-                        Toggle("Mute beeps", isOn: .init(get: { extra.beepsMuted }, set: { muted in Task { await model.setMuted(muted) } }))
+                        Toggle("Light ring", isOn: .init(get: { extra.ledEnabled }, set: { on in Task { await bedJet.setLED(on) } }))
+                        Toggle("Mute beeps", isOn: .init(get: { extra.beepsMuted }, set: { muted in Task { await bedJet.setMuted(muted) } }))
                     }
                 }
 
-                if !model.deviceSlots.isEmpty {
+                if !bedJet.deviceSlots.isEmpty {
                     Section {
-                        ForEach(Array(model.deviceSlots.enumerated()), id: \.offset) { index, program in
+                        ForEach(Array(bedJet.deviceSlots.enumerated()), id: \.offset) { index, program in
                             LabeledContent("Slot \(index + 1)") {
-                                Text(index == model.slot ? "Lull · \(program?.name ?? "Empty")" : program?.name ?? "Empty")
-                                    .accessibilityLabel(index == model.slot ? "Used by Lull, \(program?.name ?? "empty")" : program?.name ?? "Empty")
+                                Text(index == bedJet.slot ? "Lull · \(program?.name ?? "Empty")" : program?.name ?? "Empty")
+                                    .accessibilityLabel(index == bedJet.slot ? "Used by Lull, \(program?.name ?? "empty")" : program?.name ?? "Empty")
                             }
                         }
                     } header: {
@@ -51,26 +56,66 @@ struct DeviceSheet: View {
                     }
                 }
 
+                if !model.hasSeveralBedJets {
+                    Section {
+                        addButton
+                    } footer: {
+                        Text("Have a BedJet on each side of the bed? Add both, then switch between them from the top of any screen.")
+                    }
+                }
+
                 Section("App") {
                     Picker("Temperature", selection: $model.useFahrenheit) {
                         Text("°F").tag(true).accessibilityLabel("Fahrenheit")
                         Text("°C").tag(false).accessibilityLabel("Celsius")
                     }
                     Toggle("Demo mode", isOn: $model.demoMode)
-                    if !model.demoMode {
-                        Button("Forget This BedJet", role: .destructive) { model.forgetDevice() }
+                    if !model.demoMode || model.hasSeveralBedJets {
+                        Button("Forget This BedJet", role: .destructive) { model.forget(bedJet) }
                     }
                 }
             }
             .tint(.green)
-            .navigationTitle("BedJet")
+            .navigationTitle(model.hasSeveralBedJets ? "BedJets" : "BedJet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 
+    /// Every BedJet, to switch between. The sections below are about the ticked one.
+    private var bedJets: some View {
+        Section {
+            ForEach(model.bedJets) { bedJet in
+                let isShown = bedJet === model.bedJet
+                Button { model.select(bedJet.id) } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.title(of: bedJet)).foregroundStyle(.white)
+                            Text(bedJet.connectionLabel)
+                                .font(.footnote)
+                                .foregroundStyle(Theme.secondary)
+                        }
+                        Spacer()
+                        if isShown { Image(systemName: "checkmark").font(.body.weight(.semibold)) }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityAddTraits(isShown ? .isSelected : [])
+            }
+            addButton
+        } header: {
+            Text("Your BedJets")
+        } footer: {
+            Text("Every screen shows the ticked BedJet. Switch from the top of any screen too.")
+        }
+    }
+
+    private var addButton: some View {
+        Button("Add Another BedJet", systemImage: "plus") { model.addBedJet() }
+    }
+
     private var statusText: String {
-        switch model.linkState {
+        switch model.bedJet.linkState {
         case .ready: return model.demoMode ? "Demo BedJet" : "Connected"
         case .connecting: return "Connecting…"
         case .searching: return "Searching…"
@@ -81,9 +126,13 @@ struct DeviceSheet: View {
     }
 
     private var help: String {
-        switch model.linkState {
+        switch model.bedJet.linkState {
         case .ready: return model.demoMode ? "Demo mode uses a pretend BedJet so you can explore the app." : "Everything stays between this phone and your BedJet. No account, no cloud."
-        case .connecting, .searching: return "Stand near your BedJet and force-quit the official BedJet app. The BedJet talks to one phone at a time; phones with Lull hand it over to each other automatically."
+        case .connecting, .searching:
+            if model.bedJet.unit == nil, model.hasSeveralBedJets, !model.demoMode {
+                return "Turn on the BedJet you're adding and stand near it. Lull connects to the first one it finds that it doesn't already know."
+            }
+            return "Stand near your BedJet and force-quit the official BedJet app. The BedJet talks to one phone at a time; phones with Lull hand it over to each other automatically."
         case .yielded: return "The BedJet talks to one phone at a time, and another phone with Lull asked for it. Use any control here to take it back."
         case .bluetoothOff: return "Turn on Bluetooth in Control Center to connect."
         case .unauthorized: return "Allow Bluetooth for Lull in Settings to connect."

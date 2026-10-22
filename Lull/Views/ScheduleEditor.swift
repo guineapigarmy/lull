@@ -66,7 +66,7 @@ struct ScheduleEditor: View {
             .safeAreaInset(edge: .bottom) {
                 Button("Use Tonight") {
                     model.save(schedule)
-                    model.tonightID = schedule.id
+                    model.bedJet.tonightID = schedule.id
                     dismiss()
                 }
                 .buttonStyle(PrimaryButtonStyle())
@@ -185,7 +185,7 @@ private struct PhaseRow: View {
 
     private var detail: String {
         var parts: [String] = []
-        if model.adjustsTemperature(phase.mode) { parts.append(model.degrees(phase.temperature)) }
+        if model.bedJet.adjustsTemperature(phase.mode) { parts.append(model.degrees(phase.temperature)) }
         if phase.mode.usesFan { parts.append("Fan \(phase.fanPercent)%") }
         return parts.isEmpty ? "Air off" : parts.joined(separator: " · ")
     }
@@ -223,11 +223,11 @@ private struct PhaseEditor: View {
                 Spacer()
                 Button("Done") { dismiss() }.scaledFont(17, .semibold)
             }
-            ModePicker(modes: model.phaseModes, selection: phase.mode) { mode in
+            ModePicker(modes: model.bedJet.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
                 if !mode.temperatureRange.contains(phase.temperature) { phase.temperature = mode.defaultTemperature }
             }
-            if model.adjustsTemperature(phase.mode) {
+            if model.bedJet.adjustsTemperature(phase.mode) {
                 TemperatureSlider(mode: phase.mode, temperature: $phase.temperature)
             }
             if phase.mode.usesFan {
@@ -237,7 +237,7 @@ private struct PhaseEditor: View {
                           range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
             if isHeatLimited {
                 Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
-                     + (model.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
+                     + (model.bedJet.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
                     .scaledFont(13)
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)

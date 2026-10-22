@@ -10,6 +10,9 @@ public final class DemoLink: BedJetLink {
     public var onStateChange: ((LinkState) -> Void)?
     public var onStatus: ((DeviceStatus) -> Void)?
 
+    public nonisolated static let defaultName = "BEDJET-DEMO"
+
+    public let name: String
     public private(set) var slots: [StoredProgram?]
     public private(set) var clock: (hour: Int, minute: Int)?
     public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
@@ -23,7 +26,8 @@ public final class DemoLink: BedJetLink {
     private var pendingSteps: [Int: [ProgramStep]] = [:]
     private var timer: Timer?
 
-    public init(slots: [StoredProgram?] = [nil, nil, nil]) {
+    public init(name: String = DemoLink.defaultName, slots: [StoredProgram?] = [nil, nil, nil]) {
+        self.name = name
         self.slots = slots
     }
 
@@ -64,7 +68,7 @@ public final class DemoLink: BedJetLink {
     public func query(_ request: UInt8) async throws -> Data {
         switch request {
         case Codec.Query.deviceName:
-            return Data("BEDJET-DEMO".utf8) + Data([0])
+            return Data(name.utf8) + Data([0])
         case Codec.Query.firmware:
             return Data("V1.20 (demo)".utf8) + Data([0])
         case Codec.Query.programNames:

@@ -21,6 +21,13 @@ final class LullUITests: XCTestCase {
         }
     }
 
+    /// Drags a slider's thumb from one point on its track to another, as fractions of the width.
+    /// VoiceOver sees the slider and its title row as one element, so the track runs along the bottom of it.
+    private func slide(_ slider: XCUIElement, from: CGFloat, to: CGFloat) {
+        let start = slider.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0.78))
+        start.press(forDuration: 0.2, thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.78)))
+    }
+
     func testOpensOnRemote() {
         XCTAssertTrue(app.staticTexts["Remote"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.tabBars.buttons.firstMatch.label, "Remote")
@@ -38,7 +45,7 @@ final class LullUITests: XCTestCase {
 
         let end = app.buttons["End Night"]
         XCTAssertTrue(end.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'PHASE 1 OF'")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Phase 1 of'")).firstMatch.exists)
         sleep(2)
         capture("schedule-running")
 
@@ -54,7 +61,7 @@ final class LullUITests: XCTestCase {
 
         // Remote stays loaded behind the editor and has its own Turbo and Gentle heat buttons,
         // so match the phase row by its duration and take the frontmost mode button.
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Turbo' AND label CONTAINS '10 min'")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'Turbo' AND label CONTAINS '10 minutes'")).firstMatch.tap()
         XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
         let gentleHeat = app.buttons.matching(identifier: "Gentle heat")
         gentleHeat.element(boundBy: gentleHeat.count - 1).tap()
@@ -113,12 +120,12 @@ final class LullUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Turned off"].exists)
         capture("history-collapsed")
         night.tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat ·'")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Heat,'")).firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Turned off"].exists)
         XCTAssertTrue(app.staticTexts["Started Cool Drift"].exists)
         XCTAssertTrue(app.staticTexts["Ended Cool Drift"].exists)
         // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool ·'")).count, 0)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Cool,'")).count, 0)
         sleep(1)
         capture("history-expanded")
 
@@ -137,7 +144,7 @@ final class LullUITests: XCTestCase {
         XCTAssertEqual(nights.count, 3)
         // Newest first; a night without a schedule is summed up by its times instead.
         XCTAssertTrue(nights.element(boundBy: 0).label.hasSuffix("Cool Drift"))
-        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" – "))
+        XCTAssertTrue(nights.element(boundBy: 1).label.contains(" to "))
         capture("history-rows")
 
         nights.element(boundBy: 1).tap()
@@ -145,6 +152,44 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Timer ran out'")).firstMatch.exists)
         sleep(1)
         capture("history-row-expanded")
+    }
+
+    func testAddAndSwitchBedJets() {
+        let heat = app.buttons["Heat"]
+        XCTAssertTrue(heat.waitForExistence(timeout: 10))
+
+        // With one BedJet the pill says how it's connected, and its settings offer to add another.
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
+        // It's at the bottom of the sheet, which on a smaller screen isn't loaded until scrolled to.
+        let add = app.buttons["Add Another BedJet"]
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        for _ in 0..<3 where !add.exists { app.swipeUp() }
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        app.buttons["Done"].tap()
+
+        // With two, the pill names the BedJet on screen instead.
+        let second = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet, BEDJET-DEMO-2,'")).firstMatch
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet, BEDJET-DEMO,'")).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        sleep(2)
+        heat.tap()
+        let timer = app.sliders["Turns off in"]
+        XCTAssertTrue(timer.waitForExistence(timeout: 5))
+
+        // The pill switches BedJets, and each keeps its own state.
+        second.tap()
+        XCTAssertTrue(app.buttons["BEDJET-DEMO"].waitForExistence(timeout: 5))
+        capture("bedjet-switcher")
+        app.buttons["BEDJET-DEMO"].tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(timer.waitForNonExistence(timeout: 5))
+
+        first.tap()
+        app.buttons["BEDJET-DEMO-2"].tap()
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        XCTAssertTrue(timer.waitForExistence(timeout: 5))
+        app.buttons["Off"].tap()
     }
 
     func testRemoteAndDevice() {
@@ -155,23 +200,24 @@ final class LullUITests: XCTestCase {
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
-        expectation(for: NSPredicate(format: "value == '4 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
 
         // A shorter time picked by hand sticks, and survives a fan change.
-        timer.adjust(toNormalizedSliderPosition: 0)
+        slide(timer, from: 0.97, to: 0)
         sleep(3)
-        XCTAssertEqual(timer.value as? String, "5 min")
-        app.sliders["Fan"].adjust(toNormalizedSliderPosition: 0.8)
+        XCTAssertEqual(timer.value as? String, "5 minutes")
+        // Fan starts at 40%, a third of the way along.
+        slide(app.sliders["Fan"], from: 0.37, to: 0.8)
         sleep(3)
-        XCTAssertEqual(timer.value as? String, "5 min")
+        XCTAssertEqual(timer.value as? String, "5 minutes")
 
         // Switching mode starts over at that mode's longest run.
         app.buttons["Cool"].tap()
-        expectation(for: NSPredicate(format: "value == '12 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '12 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         app.buttons["Heat"].tap()
-        expectation(for: NSPredicate(format: "value == '4 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         capture("remote-heat")
         app.buttons["Off"].tap()

@@ -14,62 +14,62 @@ struct RemoteView: View {
     @State private var chosenMode: Mode?
 
     var body: some View {
-        let status = model.status
+        let bedJet = model.bedJet
+        let status = bedJet.status
         let mode = status?.mode ?? .standby
         Screen(title: "Remote") {
             ClimateOrb(status: status).frame(maxWidth: .infinity)
 
-            if model.linkState == .yielded {
+            if bedJet.linkState == .yielded {
                 Text("In use on another phone. Touch a control to take over.")
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity)
             }
 
-            ModePicker(modes: model.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
+            ModePicker(modes: bedJet.remoteModes + [.standby], selection: chosenMode ?? status?.mode,
+                       hint: bedJet.run != nil ? "Ends the schedule that's running" : nil) { mode in
                 chosenMode = mode
                 Task {
-                    await model.setMode(mode)
+                    await bedJet.setMode(mode)
                     chosenMode = nil
                 }
             }
             // Only the controls: the BedJet button stays usable, so Demo mode is reachable with Bluetooth off.
-            .disabled(!model.canControl)
+            .disabled(!bedJet.canControl)
 
             if let status, status.isRunning {
                 Card(padding: 18) {
                     VStack(spacing: 16) {
-                        if model.adjustsTemperature(mode) {
+                        if bedJet.adjustsTemperature(mode) {
                             TemperatureSlider(mode: mode, temperature: sending($temperature, "temperature") {
-                                await model.setTemperature(temperature)
+                                await bedJet.setTemperature(temperature)
                             }, limits: status.minTemperature < status.maxTemperature ? status.minTemperature...status.maxTemperature : nil)
                         }
                         LabeledSlider(title: "Fan", valueText: "\(Int(fan))%", value: sending($fan, "fan") {
-                            await model.setFan(percent: Int(fan))
+                            await bedJet.setFan(percent: Int(fan))
                         }, range: 5...100, step: 5, tint: mode.tint)
-                        if model.run == nil {
+                        if bedJet.run == nil {
                             let limit = runtimeLimit(status)
-                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)), value: sending($runtime, "runtime") {
-                                await model.setRuntime(minutes: Int(runtime))
+                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)),
+                                          spokenValue: Format.spokenDuration(Int(runtime)), value: sending($runtime, "runtime") {
+                                await bedJet.setRuntime(minutes: Int(runtime))
                             }, range: limit.range, step: limit.step)
                         } else {
                             // A schedule sets its own timing, so this is read-only until it ends.
-                            HStack {
-                                Text("Phase ends in").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.secondary)
-                                Spacer()
-                                Text(Format.duration(minutesLeft(status)))
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .monospacedDigit()
-                            }
+                            ValueHeader(title: "Phase ends in", value: Format.duration(minutesLeft(status)))
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("Phase ends in")
+                                .accessibilityValue(Format.spokenDuration(minutesLeft(status)))
                         }
                     }
                 }
-                .disabled(!model.canControl)
+                .disabled(!bedJet.canControl)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            if model.run != nil {
+            if bedJet.run != nil {
                 Text("Choosing a mode here ends the schedule that's running.")
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity)
             }
@@ -78,11 +78,16 @@ struct RemoteView: View {
         .onChange(of: status, initial: true) { _, status in
             // Follow the unit, which can also be changed from its own remote, but never
             // while a slider is being moved or its new value is still on the way there.
-            guard let status, !model.isBusy, Date() > followAfter else { return }
+            guard let status, !bedJet.isBusy, Date() > followAfter else { return }
             temperature = status.targetTemperature
             fan = Double(status.fanPercent)
             let limit = runtimeLimit(status)
             runtime = min(max(Double(minutesLeft(status)), limit.range.lowerBound), limit.range.upperBound)
+        }
+        .onChange(of: bedJet.id) {
+            // Another BedJet's settings show straight away.
+            followAfter = .distantPast
+            chosenMode = nil
         }
     }
 
@@ -119,6 +124,8 @@ struct RemoteView: View {
 struct ClimateOrb: View {
     @Environment(AppModel.self) private var model
     let status: DeviceStatus?
+    /// Grows with the text inside it, up to what fits across a phone.
+    @ScaledMetric(relativeTo: .largeTitle) private var diameter: CGFloat = 204
 
     var body: some View {
         let mode = status?.mode ?? .standby
@@ -135,27 +142,46 @@ struct ClimateOrb: View {
                 .padding(8)
             VStack(spacing: 4) {
                 if let status {
-                    Eyebrow(mode.activity)
-                    Text(isOn && model.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
-                        .font(.system(size: 60, weight: .thin))
+                    // White, unlike other labels, so it stays readable over the glow.
+                    Eyebrow(mode.activity, color: .white)
+                    Text(isOn && model.bedJet.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
+                        .scaledFont(60, .light)
                         .monospacedDigit()
                         .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
                     Text(isOn ? "Fan \(status.fanPercent)% · Air \(model.degrees(status.actualTemperature))"
                               : "Room \(model.degrees(status.ambientTemperature))")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.secondary)
+                        .scaledFont(15, .medium)
+                        .foregroundStyle(.white)
                         .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.7)
                 } else {
                     ProgressView()
-                    Text("Looking for your BedJet")
-                        .font(.system(size: 15, weight: .medium))
+                    Text(model.hasSeveralBedJets ? "Looking for \(model.title(of: model.bedJet))" : "Looking for your BedJet")
+                        .scaledFont(15, .medium)
                         .foregroundStyle(Theme.secondary)
+                        .multilineTextAlignment(.center)
                         .padding(.top, 8)
                 }
             }
+            .padding(.horizontal, 28)
         }
-        .frame(width: 204, height: 204)
+        .frame(width: min(diameter, 320), height: min(diameter, 320))
         .animation(.smooth(duration: 0.6), value: mode)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenStatus)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var spokenStatus: String {
+        guard let status else { return "Looking for your BedJet" }
+        guard status.isRunning else { return "Off, room \(model.degrees(status.ambientTemperature))" }
+        var parts = [status.mode.activity]
+        if model.bedJet.adjustsTemperature(status.mode) { parts.append("set to \(model.degrees(status.targetTemperature))") }
+        parts.append("fan \(status.fanPercent)%")
+        parts.append("air \(model.degrees(status.actualTemperature))")
+        return parts.joined(separator: ", ")
     }
 }

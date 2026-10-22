@@ -2,7 +2,8 @@
 import CryptoKit
 import Foundation
 
-/// CoreBluetooth transport for a BedJet 3 or V2. Connects to the remembered unit, or the first one found.
+/// CoreBluetooth transport for a BedJet 3 or V2. Connects to the unit it was given, or the first one found.
+/// Several links can run side by side, one per BedJet; `accepts` keeps them from taking each other's unit.
 ///
 /// The BedJet 3 has its own GATT service. The V2 sends its serial protocol (`CodecV2`) through a
 /// Microchip "transparent UART" service, which other gadgets use too, so a V2 is recognised by its name.
@@ -26,6 +27,12 @@ public final class BLELink: NSObject, BedJetLink {
     /// Return false to postpone a hand-over, for example while a schedule is being saved.
     public var canYield: () -> Bool = { true }
     public private(set) var lastConnection: ConnectionTiming?
+    /// The unit this link belongs to, known once one has connected.
+    public private(set) var unit: UUID?
+    /// The unit being connected to or connected, which may not be `unit` yet.
+    public var unitInUse: UUID? { peripheral?.identifier }
+    /// Whether a BedJet found by scanning may be used, so links for different BedJets never swap units.
+    public var accepts: (UUID) -> Bool = { _ in true }
 
     private static func uuid(_ short: String) -> CBUUID { CBUUID(string: "0000\(short)-BED0-0080-AA55-4265644A6574") }
     private static let service = uuid("1000")
@@ -36,8 +43,9 @@ public final class BLELink: NSObject, BedJetLink {
     private static let uartService = CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455")
     private static let uartNotifyUUID = CBUUID(string: "49535343-1E4D-4BD9-BA61-23C647249616")
     private static let uartWriteUUID = CBUUID(string: "49535343-8841-43F4-A8D4-ECBE34729BB3")
-    private static let rememberedKey = "BedJetKit.peripheral"
-    private static let nameKey = "BedJetKit.deviceName"
+    /// Where versions that knew a single BedJet remembered it.
+    private static let legacyUnitKey = "BedJetKit.peripheral"
+    private static let legacyNameKey = "BedJetKit.deviceName"
 
     /// How long a phone that handed over stays out of the way before it quietly waits for the BedJet again.
     private static let courtesy: TimeInterval = 10
@@ -48,14 +56,12 @@ public final class BLELink: NSObject, BedJetLink {
     private static let connectPatience: TimeInterval = 12
 
     private var central: CBCentralManager?
-    private var requester: CBPeripheralManager?
     private var peripheral: CBPeripheral?
     private var command: CBCharacteristic?
     private var reply: CBCharacteristic?
     private var wantsConnection = false
     private var yieldedUntil = Date.distantPast
     private var requestGeneration = 0
-    private var pendingRequest: CBUUID?
     private var askedAt: Date?
     private var linkUpAfter: TimeInterval?
     private var radioOnAfter: TimeInterval = 0
@@ -77,8 +83,31 @@ public final class BLELink: NSObject, BedJetLink {
     private var uartBuffer = Data()
     private var operation = 0
 
+    /// The unit found by an earlier version of Lull, for carrying over to a link made with `init(unit:)`.
+    public static var legacyUnit: (unit: UUID, name: String?)? {
+        guard let unit = UserDefaults.standard.string(forKey: legacyUnitKey).flatMap(UUID.init) else { return nil }
+        return (unit, UserDefaults.standard.string(forKey: legacyNameKey))
+    }
+
+    /// - Parameter unit: The BedJet to connect to, from an earlier `unit`. Without one, the first BedJet found is used.
+    public init(unit: UUID? = nil) {
+        self.unit = unit
+        super.init()
+        if let unit { Self.adoptLegacyName(for: unit) }
+    }
+
     public func start() {
         requestControl()
+    }
+
+    /// Connects whenever the BedJet is free, without asking another phone to hand it over.
+    public func listen() {
+        wantsConnection = true
+        if central == nil {
+            central = CBCentralManager(delegate: self, queue: .main)
+        } else {
+            connectIfPossible()
+        }
     }
 
     public func stop() {
@@ -126,10 +155,10 @@ public final class BLELink: NSObject, BedJetLink {
         }
     }
 
-    /// Forgets the remembered unit so the next `start()` pairs with whichever BedJet is nearest.
+    /// Forgets the unit so the link pairs with whichever BedJet is nearest.
     public func forget() {
-        UserDefaults.standard.removeObject(forKey: Self.rememberedKey)
-        UserDefaults.standard.removeObject(forKey: Self.nameKey)
+        if let unit { UserDefaults.standard.removeObject(forKey: Self.nameKey(of: unit)) }
+        unit = nil
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
     }
 
@@ -165,9 +194,7 @@ public final class BLELink: NSObject, BedJetLink {
     private func connectIfPossible() {
         guard wantsConnection, let central, central.state == .poweredOn, peripheral == nil else { return }
         if state == .yielded, Date() < yieldedUntil { return }
-        if !skipsRememberedUnit,
-           let remembered = UserDefaults.standard.string(forKey: Self.rememberedKey).flatMap(UUID.init),
-           let known = central.retrievePeripherals(withIdentifiers: [remembered]).first {
+        if !skipsRememberedUnit, let unit, let known = central.retrievePeripherals(withIdentifiers: [unit]).first {
             // Going straight to the unit this phone already knows is several times quicker than scanning for it.
             foundByScan = false
             connect(known)
@@ -234,7 +261,24 @@ public final class BLELink: NSObject, BedJetLink {
 
     /// Requests are specific to one BedJet, so a neighbour's phone looking for theirs is ignored.
     private var handoffUUID: CBUUID? {
-        UserDefaults.standard.string(forKey: Self.nameKey).map(Self.handoffUUID(forDeviceNamed:))
+        unit.flatMap { UserDefaults.standard.string(forKey: Self.nameKey(of: $0)) }.map(Self.handoffUUID(forDeviceNamed:))
+    }
+
+    private static func nameKey(of unit: UUID) -> String { "\(legacyNameKey).\(unit.uuidString)" }
+
+    /// The name is needed to ask for the BedJet before it has connected, so it carries over from
+    /// versions that remembered one BedJet.
+    private static func adoptLegacyName(for unit: UUID) {
+        guard UserDefaults.standard.string(forKey: nameKey(of: unit)) == nil, let legacy = legacyUnit,
+              legacy.unit == unit, let name = legacy.name else { return }
+        UserDefaults.standard.set(name, forKey: nameKey(of: unit))
+    }
+
+    /// The unit's own name identifies it to the other phone during a hand-over.
+    private func rememberName(_ name: String) {
+        guard let unit else { return }
+        UserDefaults.standard.set(name, forKey: Self.nameKey(of: unit))
+        watchForRequests()
     }
 
     static func handoffUUID(forDeviceNamed name: String) -> CBUUID {
@@ -245,17 +289,12 @@ public final class BLELink: NSObject, BedJetLink {
     }
 
     private func advertise(_ request: CBUUID) {
-        if requester == nil { requester = CBPeripheralManager(delegate: self, queue: .main) }
-        pendingRequest = request
-        guard let requester, requester.state == .poweredOn else { return }
-        requester.stopAdvertising()
-        requester.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [request]])
+        HandoffRequests.shared.set(request, for: self)
     }
 
     private func stopRequesting() {
         requestGeneration += 1
-        pendingRequest = nil
-        if let requester, requester.state == .poweredOn { requester.stopAdvertising() }
+        HandoffRequests.shared.set(nil, for: self)
     }
 
     /// While holding the BedJet, listen for another phone asking for it.
@@ -367,9 +406,7 @@ public final class BLELink: NSObject, BedJetLink {
                 onStatus?(status)
             }
             if let name = CodecV2.reply(to: CodecV2.Query.deviceName, in: packet).map(CodecV2.parseName), !name.isEmpty {
-                // The unit's own name identifies it to the other phone during a hand-over.
-                UserDefaults.standard.set(name, forKey: Self.nameKey)
-                watchForRequests()
+                rememberName(name)
             }
             if let pending = pendingReply, let payload = CodecV2.reply(to: pending.query, in: packet) {
                 pendingReply = nil
@@ -386,7 +423,7 @@ public final class BLELink: NSObject, BedJetLink {
     }
 }
 
-extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralManagerDelegate {
+extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate {
     public nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         MainActor.assumeIsolated {
             switch central.state {
@@ -400,12 +437,6 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
         }
     }
 
-    public nonisolated func peripheralManagerDidUpdateState(_ manager: CBPeripheralManager) {
-        MainActor.assumeIsolated {
-            if manager.state == .poweredOn, let request = pendingRequest { advertise(request) }
-        }
-    }
-
     public nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                            advertisementData: [String: Any], rssi RSSI: NSNumber) {
         MainActor.assumeIsolated {
@@ -415,7 +446,8 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
                 if let request = handoffUUID, services.contains(request) { handOver() }
                 return
             }
-            guard self.peripheral == nil, Self.isBedJet(peripheral, advertisement: advertisementData) else { return }
+            guard self.peripheral == nil, Self.isBedJet(peripheral, advertisement: advertisementData),
+                  accepts(peripheral.identifier) else { return }
             connect(peripheral)
         }
     }
@@ -424,7 +456,10 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
         MainActor.assumeIsolated {
             connectGeneration += 1
             skipsRememberedUnit = false
-            UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Self.rememberedKey)
+            if unit != peripheral.identifier {
+                unit = peripheral.identifier
+                Self.adoptLegacyName(for: peripheral.identifier)
+            }
             linkUpAfter = askedAt.map { Date().timeIntervalSince($0) }
             peripheral.discoverServices([Self.service, Self.uartService])
         }
@@ -521,14 +556,38 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate, CBPeripheralM
             } else if characteristic.uuid == Self.uartNotifyUUID {
                 if let value = characteristic.value { receiveUART(value) }
             } else if characteristic.uuid == Self.nameUUID {
-                // The unit's own name identifies it to the other phone during a hand-over.
                 guard let value = characteristic.value, !value.isEmpty else { return }
-                UserDefaults.standard.set(Codec.parseText(value), forKey: Self.nameKey)
-                watchForRequests()
+                rememberName(Codec.parseText(value))
             } else if characteristic.uuid == Self.replyUUID, let pending = pendingRead {
                 pendingRead = nil
                 if let value = characteristic.value { pending.resume(returning: value) } else { pending.resume(throwing: error ?? BedJetError.badResponse) }
             }
         }
+    }
+}
+
+/// The phone advertises one set of services at a time, so every link's request for its BedJet goes out together.
+@MainActor
+private final class HandoffRequests: NSObject, CBPeripheralManagerDelegate {
+    static let shared = HandoffRequests()
+
+    private var manager: CBPeripheralManager?
+    private var requests: [ObjectIdentifier: CBUUID] = [:]
+
+    func set(_ request: CBUUID?, for link: BLELink) {
+        requests[ObjectIdentifier(link)] = request
+        if manager == nil, request != nil { manager = CBPeripheralManager(delegate: self, queue: .main) }
+        advertise()
+    }
+
+    private func advertise() {
+        guard let manager, manager.state == .poweredOn else { return }
+        manager.stopAdvertising()
+        let services = Array(Set(requests.values))
+        if !services.isEmpty { manager.startAdvertising([CBAdvertisementDataServiceUUIDsKey: services]) }
+    }
+
+    nonisolated func peripheralManagerDidUpdateState(_ manager: CBPeripheralManager) {
+        MainActor.assumeIsolated { advertise() }
     }
 }

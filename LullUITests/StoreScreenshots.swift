@@ -28,7 +28,7 @@ final class StoreScreenshots: XCTestCase {
         heat.tap()
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
-        expectation(for: NSPredicate(format: "value == '4 hr'"), evaluatedWith: timer)
+        expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         sleep(6)
         try capture("01-remote")
@@ -41,7 +41,7 @@ final class StoreScreenshots: XCTestCase {
         XCTAssertTrue(app.buttons["Add Phase"].waitForExistence(timeout: 5))
         try capture("03-editor")
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Heat' AND label CONTAINS '30 min'")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'Heat' AND label CONTAINS '30 minutes'")).firstMatch.tap()
         XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
         try capture("04-phase")
         app.buttons["Done"].tap()

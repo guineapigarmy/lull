@@ -81,7 +81,23 @@ gh secret set DIST_CERT_PASSWORD --env app-store --repo rkanjani/lull
 
 Then delete the local `.p12` and keep the `.p8` somewhere safe, such as a password manager.
 
-### 4. Turn it on
+### 4. Widgets: App Group and bundle identifier
+
+The widgets ship as an extension inside the app (`com.rohankanjani.lull.widgets`), and read what the app
+saves through the App Group `group.com.rohankanjani.lull`. The workflow fetches a distribution profile for
+each, which only includes the App Group once it is registered and assigned to both identifiers. Do this
+once, before the first release with widgets:
+
+1. Open `Lull.xcodeproj`, choose a connected iPhone as the destination, and build. With automatic
+   signing, Xcode registers the widgets' identifier and the App Group, and turns on App Groups for both.
+2. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list),
+   check that `com.rohankanjani.lull` and `com.rohankanjani.lull.widgets` both list
+   `group.com.rohankanjani.lull` under App Groups.
+
+The release lane signs both targets and gives the widgets the app's version, so only the app's
+**Version** needs raising.
+
+### 5. Turn it on
 
 ```bash
 gh variable set APP_STORE_RELEASE --body true --repo rkanjani/lull

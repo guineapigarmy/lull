@@ -7,6 +7,8 @@ require "tmpdir"
 default_platform(:ios)
 
 BUNDLE_ID = "com.rohankanjani.lull"
+# Each target that is signed, with its bundle identifier. The widgets ship inside the app.
+SIGNED_TARGETS = { "Lull" => BUNDLE_ID, "LullWidgets" => "#{BUNDLE_ID}.widgets" }
 TEAM_ID = "7786XZ3V4B"
 PROJECT = "Lull.xcodeproj"
 
@@ -48,24 +50,28 @@ platform :ios do
       keychain_name: "fastlane_tmp_keychain",
       keychain_password: ""
     )
-    get_provisioning_profile(api_key: api_key, app_identifier: BUNDLE_ID, team_id: TEAM_ID)
-    profile = lane_context[SharedValues::SIGH_NAME]
-    update_code_signing_settings(
-      path: PROJECT,
-      targets: ["Lull"],
-      use_automatic_signing: false,
-      team_id: TEAM_ID,
-      code_sign_identity: "Apple Distribution",
-      profile_name: profile
-    )
+    profiles = SIGNED_TARGETS.to_h do |target, bundle_id|
+      get_provisioning_profile(api_key: api_key, app_identifier: bundle_id, team_id: TEAM_ID)
+      profile = lane_context[SharedValues::SIGH_NAME]
+      update_code_signing_settings(
+        path: PROJECT,
+        targets: [target],
+        use_automatic_signing: false,
+        team_id: TEAM_ID,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile
+      )
+      [bundle_id, profile]
+    end
 
     build_app(
       project: PROJECT,
       scheme: "Lull",
       configuration: "Release",
       export_method: "app-store",
-      export_options: { provisioningProfiles: { BUNDLE_ID => profile } },
-      xcargs: "CURRENT_PROJECT_VERSION=#{build}",
+      export_options: { provisioningProfiles: profiles },
+      # The widgets must carry the app's version, and only the app's is raised in Xcode.
+      xcargs: "CURRENT_PROJECT_VERSION=#{build} MARKETING_VERSION=#{version}",
       output_directory: "build",
       clean: true
     )

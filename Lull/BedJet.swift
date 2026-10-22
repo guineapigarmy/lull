@@ -534,6 +534,7 @@ final class BedJet: Identifiable {
     }
 
     private func saveHistory() {
+        app?.publishWidgets()
         guard !AppModel.isEphemeral else { return }
         let saved = SavedHistory(entries: history, lastSeen: lastSeen)
         let file = Self.historyFile(for: id)

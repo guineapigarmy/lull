@@ -81,6 +81,7 @@ import com.rohankanjani.lull.title
 
 @Composable
 fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
+    val bedJet = LocalBedJet.current
     var schedule by remember(initial.id) { mutableStateOf(initial) }
     var selection by remember { mutableStateOf<String?>(null) }
     var picksBedtime by remember { mutableStateOf(false) }
@@ -204,7 +205,7 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                         "Use Tonight",
                         onClick = {
                             model.save(schedule)
-                            model.bedJet.tonightID = schedule.id
+                            bedJet.tonightID = schedule.id
                             onDismiss()
                         },
                         enabled = isValid,
@@ -277,8 +278,9 @@ private fun PhaseRow(
     onDelete: (() -> Unit)?,
     onClick: () -> Unit,
 ) {
+    val bedJet = LocalBedJet.current
     val detail = buildList {
-        if (model.bedJet.adjustsTemperature(phase.mode)) add(model.degrees(phase.temperature))
+        if (bedJet.adjustsTemperature(phase.mode)) add(model.degrees(phase.temperature))
         if (phase.mode.usesFan) add("Fan ${phase.fanPercent}%")
     }.ifEmpty { listOf("Air off") }.joinToString(" · ")
     val shape = RoundedCornerShape(22.dp)
@@ -342,6 +344,7 @@ private fun PhaseEditor(
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val bedJet = LocalBedJet.current
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isHeatLimited = phase.maxMinutes < phase.mode.maxMinutes
     LaunchedEffect(phase.maxMinutes) {
@@ -357,7 +360,7 @@ private fun PhaseEditor(
                 Spacer(Modifier.weight(1f))
                 TextButton(onDismiss) { Text("Done", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White) }
             }
-            ModePicker(model.bedJet.phaseModes, phase.mode) { mode ->
+            ModePicker(bedJet.phaseModes, phase.mode) { mode ->
                 onChange(
                     phase.copy(
                         mode = mode,
@@ -365,7 +368,7 @@ private fun PhaseEditor(
                     ),
                 )
             }
-            if (model.bedJet.adjustsTemperature(phase.mode)) {
+            if (bedJet.adjustsTemperature(phase.mode)) {
                 TemperatureSlider(model, phase.mode, phase.temperature, onChange = { onChange(phase.copy(temperature = it)) })
             }
             if (phase.mode.usesFan) {
@@ -384,7 +387,7 @@ private fun PhaseEditor(
             if (isHeatLimited) {
                 Text(
                     "At this temperature and fan, BedJet heats for up to ${Format.duration(phase.maxMinutes)} before its safety cut-off." +
-                        if (model.bedJet.generation.supports(Mode.EXTENDED_HEAT)) " Use Gentle heat to run longer." else "",
+                        if (bedJet.generation.supports(Mode.EXTENDED_HEAT)) " Use Gentle heat to run longer." else "",
                     fontSize = 13.sp, color = Theme.secondary,
                 )
             }

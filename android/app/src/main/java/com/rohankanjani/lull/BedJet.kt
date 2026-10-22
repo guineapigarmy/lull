@@ -1,5 +1,6 @@
 package com.rohankanjani.lull
 
+import android.icu.text.ListFormatter
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -39,9 +40,12 @@ import java.util.UUID
 @Serializable
 data class SavedBedJet(
     val id: String = UUID.randomUUID().toString(),
+    /** The Bluetooth identity of the unit this BedJet always connects to. */
     val unit: String? = null,
     val name: String? = null,
-    val generation: Generation = Generation.V3,
+    val nickname: String? = null,
+    /** Null until the unit has said what it is. */
+    val generation: Generation? = null,
     val tonightID: String? = null,
     val run: ActiveRun? = null,
     val slot: Int? = null,
@@ -50,15 +54,23 @@ data class SavedBedJet(
 /** One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did. */
 class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel) {
     val id: String = saved.id
-    /** The Bluetooth identity of the unit, known once it has connected. A demo has none. */
-    var unit by mutableStateOf(saved.unit); private set
+    /** The Bluetooth identity of the unit picked for this BedJet. Lull never connects it to another. */
+    val unit: String? = saved.unit
     /** The name the BedJet gives itself, kept so it can be shown while the BedJet is away. */
     var name by mutableStateOf(saved.name); private set
+    private var savedNickname by mutableStateOf(saved.nickname)
+    /** A name given on this phone, such as "My side". The BedJet itself isn't renamed. */
+    var nickname: String?
+        get() = savedNickname
+        set(value) { savedNickname = value; app.save() }
+    val displayName: String
+        get() = nickname?.trim()?.takeIf { it.isNotEmpty() } ?: name ?: "BedJet"
     var linkState by mutableStateOf(LinkState.SEARCHING); private set
     var status by mutableStateOf<DeviceStatus?>(null); private set
     var firmware by mutableStateOf<String?>(null); private set
-    /** The kind of BedJet, kept so schedules can be edited for it while it is away. */
-    var generation by mutableStateOf(saved.generation); private set
+    /** The kind of BedJet, kept so schedules can be edited for it while it is away. Null until it has said. */
+    var knownGeneration by mutableStateOf(saved.generation); private set
+    val generation: Generation get() = knownGeneration ?: Generation.V3
     /** What is saved in the BedJet's three program slots. */
     var deviceSlots by mutableStateOf<List<StoredProgram?>>(emptyList()); private set
 
@@ -85,6 +97,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     /** Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check. */
     var isSlowToFind by mutableStateOf(false); private set
     var isBusy by mutableStateOf(false); private set
+    /** A schedule is being written to the BedJet, which takes several steps. */
+    var isSavingSchedule by mutableStateOf(false); private set
     /** Set when every slot on the BedJet is taken and the user has to pick one to reuse. */
     var needsSlotChoice by mutableStateOf(false)
 
@@ -101,7 +115,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var lastCommandAt = 0L
 
     val saved: SavedBedJet
-        get() = SavedBedJet(id, unit, name, generation, tonightID, run, slot)
+        get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot)
 
     val tonight: Schedule?
         get() = app.schedules.firstOrNull { it.id == tonightID } ?: app.schedules.firstOrNull()
@@ -143,19 +157,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         status = null
         firmware = null
         deviceSlots = emptyList()
-        val link: BedJetLink = if (isDemo) {
-            DemoLink(
-                name = name ?: DemoLink.DEFAULT_NAME,
-                slots = listOf(StoredProgram("Summer nights", Schedule.templates[2].program.steps), null, null),
-                scope = app.scope,
-            )
-        } else {
-            BleLink(app.getApplication(), unit).apply {
-                accepts = { unit -> app.accepts(unit, this@BedJet) }
-                // Never hand the BedJet to another phone halfway through saving a schedule.
-                canYield = { !isBusy }
-            }
-        }
+        val link = app.makeLink(this)
+        // Never hand the BedJet to another phone halfway through saving a schedule.
+        (link as? BleLink)?.canYield = { !isBusy }
         link.onStateChange = { linkStateChanged(it) }
         link.onStatus = { statusChanged(it) }
         this.link = link
@@ -182,19 +186,6 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         restartSearchTimer()
     }
 
-    /** Lets go of the unit, so the nearest BedJet takes its place. */
-    fun forgetUnit() {
-        (link as? BleLink)?.forget()
-        unit = null
-        name = null
-        slot = null
-        lastRefresh = 0
-        app.save()
-    }
-
-    /** The unit being connected to or connected, so other BedJets leave it alone. */
-    val unitInUse: String? get() = (link as? BleLink)?.unitInUse
-
     private fun restartSearchTimer() {
         searchTimer?.cancel()
         searchTimer = null
@@ -207,7 +198,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
      */
     private fun timeSearch() {
-        if (isDemo || (linkState != LinkState.SEARCHING && linkState != LinkState.CONNECTING)) {
+        if (linkState != LinkState.SEARCHING && linkState != LinkState.CONNECTING) {
             searchTimer?.cancel()
             searchTimer = null
             isSlowToFind = false
@@ -226,14 +217,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         val link = link ?: return
         if (state != LinkState.READY) return
         connectedAt = System.currentTimeMillis()
-        generation = link.generation
-        val found = (link as? BleLink)?.unit
-        if (found != null && found != unit) {
-            // A replacement unit has its own slots and name.
-            if (unit != null) slot = null
-            unit = found
-            lastRefresh = 0
-        }
+        knownGeneration = link.generation
         app.save()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
@@ -300,7 +284,18 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     suspend fun startTonight() {
         val schedule = tonight ?: return
         val link = link ?: return
+        isSavingSchedule = true
+        try {
+            startTonight(schedule, link)
+        } finally {
+            isSavingSchedule = false
+        }
+    }
+
+    private suspend fun startTonight(schedule: Schedule, link: BedJetLink) {
         perform {
+            // Known for certain once connected, which `perform` waited for; checked before anything is written.
+            problem(schedule)?.let { throw BedJetError.InvalidProgram(it) }
             // A V2 holds just the one sequence, which Lull always replaces.
             val slot: Int
             if (link.generation == Generation.V2) {
@@ -574,29 +569,25 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private data class SavedHistory(val entries: List<HistoryEntry>, val lastSeen: Seen? = null)
 
     private fun loadHistory() {
-        val saved = if (app.options.ephemeral) null
-        else runCatching { AppModel.json.decodeFromString<SavedHistory>(historyFile(app, id).readText()) }.getOrNull()
+        val saved = historyFile?.let { file -> runCatching { AppModel.json.decodeFromString<SavedHistory>(file.readText()) }.getOrNull() }
         history = saved?.entries ?: if (app.options.demoHistory) HistoryEntry.samples() else emptyList()
         lastSeen = saved?.lastSeen
     }
 
     private fun saveHistory() {
         app.publishWidgets()
-        if (app.options.ephemeral) return
+        val file = historyFile ?: return
         val saved = SavedHistory(history, lastSeen)
         runCatching {
-            val file = historyFile(app, id)
+            file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(AppModel.json.encodeToString(SavedHistory.serializer(), saved))
             temporary.renameTo(file)
         }
     }
 
-    fun deleteHistory() {
-        settling?.cancel()
-        settling = null
-        historyFile(app, id).delete()
-    }
+    /** Each BedJet keeps its own history, and demo BedJets are separate ones, so pretend nights never mix with real ones. */
+    private val historyFile: File? get() = app.storage.historyFile(id)
 
     // Schedules
 
@@ -605,6 +596,21 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     val phaseModes: List<Mode> get() = com.rohankanjani.lull.phaseModes.filter(generation::supports)
 
     fun adjustsTemperature(mode: Mode): Boolean = generation.adjustsTemperature(mode)
+
+    /**
+     * Modes in a schedule that this BedJet can't run. Schedules are shared between BedJets, so one made for a
+     * BedJet 3 may not suit a V2; it is never changed to fit, only refused.
+     */
+    fun unsupportedModes(schedule: Schedule): List<Mode> =
+        schedule.phases.map { it.mode }.filter { !generation.supports(it) }.distinct()
+
+    /** Why a schedule can't run on this BedJet, if it can't. */
+    fun problem(schedule: Schedule): String? {
+        val modes = unsupportedModes(schedule)
+        if (modes.isEmpty()) return null
+        val names = ListFormatter.getInstance().format(modes.map { it.title })
+        return "$displayName is a BedJet V2, which can't run $names. Edit “${schedule.name}” or pick another schedule for it."
+    }
 
     /** A word or two on how the connection is going, short enough for the pill. */
     val connectionLabel: String
@@ -623,10 +629,4 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     val spokenConnectionLabel: String
         get() = if (linkState == LinkState.YIELDED && !isSlowToFind) "in use on another phone" else connectionLabel
-
-    companion object {
-        /** Each BedJet keeps its own history, and demo BedJets are separate ones, so pretend nights never mix with real ones. */
-        fun historyFile(app: AppModel, id: String): File =
-            File(app.getApplication<android.app.Application>().filesDir, "history-$id.json")
-    }
 }

@@ -39,6 +39,8 @@ class MainActivity : ComponentActivity() {
                     labelsDemoAsConnected = intent.getBooleanExtra("demoLabelConnected", false),
                     logsConnections = intent.getBooleanExtra("logConnections", false),
                     demoHistory = intent.getBooleanExtra("demoHistory", false),
+                    demoStartsUnchosen = intent.getBooleanExtra("demoChoose", false),
+                    demoFirstUnitAway = intent.getBooleanExtra("demoFirstUnitAway", false),
                 )
                 return AppModel(application, options) as T
             }

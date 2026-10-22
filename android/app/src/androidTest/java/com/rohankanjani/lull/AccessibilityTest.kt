@@ -63,6 +63,12 @@ class AccessibilityTest {
             compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
             compose.waitFor(hasText("Done"))
             audit()
+            // BedJets nearby, each row read with its kind and signal.
+            compose.onNodeWithText("Add Another BedJet").performScrollTo().performClick()
+            compose.waitFor(hasContentDescription("BEDJET-DEMO · 5F2C, BedJet 3, fair signal"))
+            audit()
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose.waitFor(hasText("Done"))
             compose.onNodeWithText("Done").performClick()
 
             compose.onNodeWithText("Schedule").performClick()

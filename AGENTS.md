@@ -36,6 +36,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Simulated BedJet | `BedJetKit/.../DemoLink.swift` | `android/bedjetkit/.../DemoLink.kt` |
 | Bluetooth transport | `BedJetKit/.../BLELink.swift` | `android/app/src/main/java/com/rohankanjani/lull/BleLink.kt` |
 | Hand-over UUID | `BLELink.handoffUUID` | `android/bedjetkit/.../Handoff.kt` |
+| BedJets nearby, and binding a link to its unit | `BedJetKit/.../Discovery.swift`, `BLELink.takes` | `android/bedjetkit/.../Discovery.kt` (with `takes`), `android/app/.../BleDiscovery.kt` |
 | App state: the BedJets, schedules, settings | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` |
 | One BedJet: connection, night, history | `Lull/BedJet.swift` | `android/app/.../BedJet.kt` |
 | Schedules, phases, templates, formatting | `Lull/Schedule.swift` | `android/app/.../Schedule.kt` |
@@ -46,7 +47,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Schedule tab | `Lull/Views/ScheduleView.swift` | `android/app/.../ui/ScheduleScreen.kt` |
 | Schedule and phase editors | `Lull/Views/ScheduleEditor.swift` | `android/app/.../ui/ScheduleEditor.kt` (`TemperatureSlider` is in `RemoteScreen.kt`, `ModePicker` in `Theme.kt`) |
 | Night curve | `Lull/Views/NightCurve.swift` | `android/app/.../ui/NightCurve.kt` |
-| BedJet sheet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
+| BedJet sheet, BedJets nearby, choosing a BedJet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
 | What widgets are handed | `Shared/WidgetSnapshot.swift` | `android/app/.../WidgetSnapshot.kt` |
@@ -55,8 +56,9 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
 | Widget pieces and redraws | `LullWidgets/WidgetParts.swift` | `android/app/.../widgets/WidgetParts.kt`, `Drawing.kt` |
 | Start Night and Remote controls | `LullWidgets/Controls.swift` | `android/app/.../widgets/Tiles.kt` (Quick Settings tiles and app shortcuts) |
-| Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt` |
+| Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
+| Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
 | Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt` |
 | Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
@@ -66,9 +68,13 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Store listing | `fastlane/metadata/en-US/` | `fastlane/metadata/android/en-US/` |
 | Release | `fastlane ios release`, `.github/workflows/app-store.yml` | `fastlane android release`, `.github/workflows/play-store.yml` |
 
-Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory` and
-`-logConnections` on iOS are the `ephemeral`, `demoElapsedMinutes`, `demoLabelConnected`, `demoHistory` and
-`logConnections` intent extras on Android.
+Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory`,
+`-demoChoose`, `-demoFirstUnitAway` and `-logConnections` on iOS are the intent extras of the same names on
+Android.
+
+A BedJet's unit is its `CBPeripheral.identifier` on iOS and its Bluetooth address on Android. Each phone knows
+a unit by its own identifier, so the short code shown after a shared name differs between an iPhone and an
+Android phone. The simulated BedJets use the same identifiers on both, so their codes match.
 
 ## Accessibility, on both
 

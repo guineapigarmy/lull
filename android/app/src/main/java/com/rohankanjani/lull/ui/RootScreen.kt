@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +44,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.View
 import com.rohankanjani.lull.AppCommands
 import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.LullTab
@@ -78,10 +82,12 @@ import com.rohankanjani.lull.BedJet
 import com.rohankanjani.lull.bedjetkit.LinkState
 import kotlinx.coroutines.launch
 
+/** The BedJet every screen shows and controls, like iOS's `@Environment(BedJet.self)`. */
+val LocalBedJet = compositionLocalOf<BedJet> { error("No BedJet chosen") }
+
 @Composable
 fun RootScreen(model: AppModel) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val bedJet = model.bedJet
     // Widgets open the tab they show; tiles and shortcuts send commands.
     DisposableEffect(Unit) {
         AppCommands.handler = { command ->
@@ -91,7 +97,7 @@ fun RootScreen(model: AppModel) {
                     selectedTab = LullTab.SCHEDULE.ordinal
                     // A night already under way, from this phone or another, is left running and shown.
                     val shown = model.bedJet
-                    if (shown.run == null && shown.runningElsewhereStep == null && !shown.isBusy) {
+                    if (shown != null && shown.run == null && shown.runningElsewhereStep == null && !shown.isBusy) {
                         model.scope.launch { shown.startTonight() }
                     }
                 }
@@ -99,6 +105,41 @@ fun RootScreen(model: AppModel) {
         }
         onDispose { AppCommands.handler = null }
     }
+    val view = LocalView.current
+    var lastSelected by remember { mutableStateOf(model.selectedID) }
+    LaunchedEffect(model.selectedID) {
+        val old = lastSelected
+        lastSelected = model.selectedID
+        // Said once, when the person switches; scanning and background BedJets stay quiet.
+        val bedJet = model.bedJet
+        if (old == null || old == model.selectedID || bedJet == null) return@LaunchedEffect
+        view.announce("Showing ${model.title(bedJet)}, ${bedJet.spokenConnectionLabel}")
+    }
+
+    val bedJet = model.bedJet
+    if (bedJet == null) {
+        // Lull only ever controls a BedJet the person picked.
+        ChooseBedJetScreen(model)
+    } else {
+        CompositionLocalProvider(LocalBedJet provides bedJet) { Tabs(model, bedJet, selectedTab) { selectedTab = it } }
+    }
+
+    model.errorMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { model.errorMessage = null },
+            confirmButton = { TextButton({ model.errorMessage = null }) { Text("OK") } },
+            title = { Text("Something went wrong") },
+            text = { Text(message) },
+            containerColor = Theme.raised,
+        )
+    }
+}
+
+@Suppress("DEPRECATION") // Still the way to speak a passing event; live regions suit text that stays on screen.
+private fun View.announce(message: String) = announceForAccessibility(message)
+
+@Composable
+private fun Tabs(model: AppModel, bedJet: BedJet, selectedTab: Int, select: (Int) -> Unit) {
     Scaffold(
         containerColor = Theme.background,
         // Each screen pads for the status bar itself, so it can scroll beneath it.
@@ -115,15 +156,15 @@ fun RootScreen(model: AppModel) {
                         indicatorColor = Theme.raised,
                     )
                     NavigationBarItem(
-                        selected = selectedTab == 0, onClick = { selectedTab = 0 },
+                        selected = selectedTab == 0, onClick = { select(0) },
                         icon = { Icon(Icons.Filled.SettingsRemote, null) }, label = { Text("Remote") }, colors = colors,
                     )
                     NavigationBarItem(
-                        selected = selectedTab == 1, onClick = { selectedTab = 1 },
+                        selected = selectedTab == 1, onClick = { select(1) },
                         icon = { Icon(Icons.Filled.NightsStay, null) }, label = { Text("Schedule") }, colors = colors,
                     )
                     NavigationBarItem(
-                        selected = selectedTab == 2, onClick = { selectedTab = 2 },
+                        selected = selectedTab == 2, onClick = { select(2) },
                         icon = { Icon(Icons.Filled.History, null) }, label = { Text("History") }, colors = colors,
                     )
                 }
@@ -141,16 +182,6 @@ fun RootScreen(model: AppModel) {
 
     // Remade for each BedJet, so switching to another isn't announced as its connection or night changing.
     key(bedJet.id) { Announcements(bedJet) }
-
-    model.errorMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { model.errorMessage = null },
-            confirmButton = { TextButton({ model.errorMessage = null }) { Text("OK") } },
-            title = { Text("Something went wrong") },
-            text = { Text(message) },
-            containerColor = Theme.raised,
-        )
-    }
 
     if (bedJet.needsSlotChoice) {
         AlertDialog(
@@ -186,9 +217,7 @@ fun RootScreen(model: AppModel) {
 @Composable
 private fun Announcements(bedJet: BedJet) {
     val view = LocalView.current
-    // Still the way to speak a passing event; live regions suit text that stays on screen.
-    @Suppress("DEPRECATION")
-    fun announce(message: String) = view.announceForAccessibility(message)
+    fun announce(message: String) = view.announce(message)
 
     var lastState by remember { mutableStateOf(bedJet.linkState) }
     LaunchedEffect(bedJet.linkState) {
@@ -216,10 +245,11 @@ private fun Announcements(bedJet: BedJet) {
     }
 }
 
-/** Screen scaffold shared by the tabs: large title on the left, BedJet connection on the right. */
+/** Screen scaffold shared by the tabs: large title on the left, the BedJet on screen and its connection on the right. */
 @Composable
 fun Screen(model: AppModel, title: String, subtitle: String? = null, content: @Composable ColumnScope.() -> Unit) {
     var showsDevice by remember { mutableStateOf(false) }
+    var showsChooser by remember { mutableStateOf(false) }
     val heading = @Composable {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (subtitle != null) Eyebrow(subtitle)
@@ -240,34 +270,35 @@ fun Screen(model: AppModel, title: String, subtitle: String? = null, content: @C
         if (isLargeText()) {
             Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 heading()
-                ConnectionPill(model) { showsDevice = true }
+                ConnectionPill(model, openSettings = { showsDevice = true }, openChooser = { showsChooser = true })
             }
         } else {
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 // A long BedJet name wraps rather than the screen's title.
                 Box(Modifier.weight(1f)) { heading() }
-                ConnectionPill(model) { showsDevice = true }
+                ConnectionPill(model, openSettings = { showsDevice = true }, openChooser = { showsChooser = true })
             }
         }
         content()
     }
-    if (showsDevice) DeviceSheet(model) { showsDevice = false }
+    if (showsDevice) DeviceSheet(model, LocalBedJet.current) { showsDevice = false }
+    if (showsChooser) NearbySheet(model) { showsChooser = false }
 }
 
 /**
- * Shows the BedJet's connection and opens its settings. With several BedJets it names the one on
- * screen and switches between them.
+ * Names the BedJet on screen and says how its connection is going, in words as well as the dot. Opens its
+ * settings; with several BedJets it switches between them.
  */
 @Composable
-fun ConnectionPill(model: AppModel, openSettings: () -> Unit) {
-    val bedJet = model.bedJet
+fun ConnectionPill(model: AppModel, openSettings: () -> Unit, openChooser: () -> Unit) {
+    val bedJet = LocalBedJet.current
+    val title = model.title(bedJet)
     if (model.hasSeveralBedJets) {
         var open by remember { mutableStateOf(false) }
         val haptics = LocalHapticFeedback.current
-        val title = model.title(bedJet)
         Box {
             PillFace(
-                title, bedJet.isConnected, switches = true,
+                title, bedJet.connectionLabel, bedJet.isConnected, switches = true,
                 modifier = Modifier.clearAndSetSemantics {
                     contentDescription = "BedJet, $title, ${bedJet.spokenConnectionLabel}"
                     role = Role.DropdownList
@@ -276,6 +307,13 @@ fun ConnectionPill(model: AppModel, openSettings: () -> Unit) {
                 onClick = { open = true },
             )
             DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Theme.raised) {
+                // Picking another is refused until then, so say why.
+                if (!model.canSwitch) {
+                    Text(
+                        "Switching waits until the schedule finishes saving to $title.",
+                        fontSize = 13.sp, color = Theme.secondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(240.dp),
+                    )
+                }
                 model.bedJets.forEach { other ->
                     val isShown = other === bedJet
                     DropdownMenuItem(
@@ -292,7 +330,8 @@ fun ConnectionPill(model: AppModel, openSettings: () -> Unit) {
                 HorizontalDivider(color = Theme.hairline)
                 DropdownMenuItem(
                     text = { Text("Add Another BedJet") }, leadingIcon = { Icon(Icons.Filled.Add, null) },
-                    onClick = { open = false; model.addBedJet() },
+                    onClick = { open = false; openChooser() },
+                    enabled = model.canSwitch,
                 )
                 DropdownMenuItem(
                     text = { Text("BedJet Settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) },
@@ -302,9 +341,9 @@ fun ConnectionPill(model: AppModel, openSettings: () -> Unit) {
         }
     } else {
         PillFace(
-            bedJet.connectionLabel, bedJet.isConnected,
+            title, bedJet.connectionLabel, bedJet.isConnected,
             modifier = Modifier.clearAndSetSemantics {
-                contentDescription = "BedJet, ${bedJet.spokenConnectionLabel}"
+                contentDescription = "BedJet, $title, ${bedJet.spokenConnectionLabel}"
                 role = Role.Button
                 onClick(label = "Show the connection, BedJet settings and help finding it") { openSettings(); true }
             },
@@ -314,17 +353,20 @@ fun ConnectionPill(model: AppModel, openSettings: () -> Unit) {
 }
 
 @Composable
-private fun PillFace(text: String, isConnected: Boolean, modifier: Modifier, switches: Boolean = false, onClick: () -> Unit) {
+private fun PillFace(title: String, state: String, isConnected: Boolean, modifier: Modifier, switches: Boolean = false, onClick: () -> Unit) {
     val pulse = rememberInfiniteTransition(label = "pulse")
     val dimmed by pulse.animateFloat(1f, 0.3f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "dot")
-    Pill(modifier.heightIn(min = 36.dp), onClick = onClick) {
+    Pill(modifier.heightIn(min = 44.dp), onClick = onClick) {
         Box(
             Modifier
                 .size(8.dp)
                 .alpha(if (isConnected) 1f else dimmed)
                 .background(if (isConnected) Theme.green else Theme.neutral, CircleShape),
         )
-        Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 6.dp))
+        Column(Modifier.padding(vertical = 4.dp)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(state, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Theme.secondary)
+        }
         if (switches) Icon(Icons.Filled.UnfoldMore, null, tint = Theme.secondary, modifier = Modifier.size(14.dp))
     }
 }

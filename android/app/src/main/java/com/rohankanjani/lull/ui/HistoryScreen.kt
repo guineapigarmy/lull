@@ -67,9 +67,10 @@ import java.util.Locale
 /** What the BedJet did each night, so the morning after you can see what you picked at 3 a.m. */
 @Composable
 fun HistoryScreen(model: AppModel) {
+    val bedJet = LocalBedJet.current
     val expanded = remember { mutableStateListOf<String>() }
     Screen(model, "History") {
-        val nights = model.bedJet.nights
+        val nights = bedJet.nights
         if (nights.isEmpty()) {
             Card {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -158,11 +159,12 @@ private fun NightRow(model: AppModel, night: Night, isExpanded: Boolean, toggle:
 
 @Composable
 private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
+    val bedJet = LocalBedJet.current
     val event = entry.event
     // Parts are joined with a dot on screen; TalkBack gets commas and durations in words.
     fun title(spoken: Boolean): String = when (event) {
         is HistoryEntry.Event.Air -> {
-            val parts = if (model.bedJet.adjustsTemperature(event.mode)) {
+            val parts = if (bedJet.adjustsTemperature(event.mode)) {
                 listOf(event.mode.title, model.degrees(event.temperature), "fan ${event.fanPercent}%")
             } else {
                 listOf(event.mode.title, "fan ${event.fanPercent}%")

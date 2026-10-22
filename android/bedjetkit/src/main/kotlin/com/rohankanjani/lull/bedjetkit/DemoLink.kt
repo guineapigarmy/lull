@@ -26,11 +26,15 @@ class DemoLink(
     override var onStateChange: ((LinkState) -> Unit)? = null
     override var onStatus: ((DeviceStatus) -> Unit)? = null
 
+    /** False pretends the unit is switched off or out of range: it is looked for but never connects. */
+    var answers = true
     var slots: List<StoredProgram?> = slots
         private set
     var clock: Pair<Int, Int>? = null
         private set
     override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) status else null
+    /** The step of the program running on the unit, connected or not; 0 when none is. */
+    val programStep: Int get() = status.extra?.programStep ?: 0
 
     private var status = DeviceStatus(
         remainingSeconds = 0, actualTemperature = 46, targetTemperature = 60, mode = Mode.STANDBY, fanStep = 7,
@@ -49,7 +53,7 @@ class DemoLink(
     private var timer: Job? = null
 
     override fun start() {
-        if (timer != null) return
+        if (timer != null || !answers) return
         state = LinkState.CONNECTING
         timer = (scope ?: MainScope()).launch {
             while (true) {

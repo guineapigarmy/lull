@@ -20,6 +20,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
@@ -35,6 +36,7 @@ import com.rohankanjani.lull.bedjetkit.CodecV2
 import com.rohankanjani.lull.bedjetkit.ConnectionTiming
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
 import com.rohankanjani.lull.bedjetkit.Generation
+import com.rohankanjani.lull.bedjetkit.takes
 import com.rohankanjani.lull.bedjetkit.Handoff
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.deviceName
@@ -48,8 +50,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /**
- * Android Bluetooth transport for a BedJet 3 or V2. Connects to the unit it was given, or the first one found.
- * Several links can run side by side, one per BedJet; [accepts] keeps them from taking each other's unit.
+ * Android Bluetooth transport for a BedJet 3 or V2. A link made for a unit only ever connects to that unit, so
+ * several can run side by side, one per BedJet, and none silently swaps in another BedJet. Without a unit it
+ * takes the first one found.
  * Everything runs on the main thread; Bluetooth callbacks are posted there.
  *
  * The BedJet 3 has its own GATT service. The V2 sends its serial protocol ([CodecV2]) through a
@@ -63,18 +66,14 @@ import java.util.UUID
 @SuppressLint("MissingPermission") // Every Bluetooth call is behind hasPermissions().
 class BleLink(
     context: Context,
-    /** The BedJet to connect to, from an earlier [unit]. Without one, the first BedJet found is used. */
+    /** The BedJet to connect to. Without one, the first BedJet found is used. */
     unit: String? = null,
 ) : BedJetLink {
     private val context = context.applicationContext
 
-    /** The unit this link belongs to (its Bluetooth address), known once one has connected. */
+    /** The unit this link belongs to (its Bluetooth address): the one it was made for, or the first found by a link made without one. */
     var unit: String? = unit
         private set
-    /** The unit being connected to or connected, which may not be [unit] yet. */
-    val unitInUse: String? get() = gatt?.device?.address
-    /** Whether a BedJet found by scanning may be used, so links for different BedJets never swap units. */
-    var accepts: (String) -> Boolean = { true }
 
     override var state: LinkState = LinkState.SEARCHING
         private set(value) {
@@ -95,11 +94,33 @@ class BleLink(
         private set
 
     companion object {
+        /** Where the link keeps what it knows about units. */
+        fun preferences(context: Context): SharedPreferences = context.getSharedPreferences("BedJetKit", Context.MODE_PRIVATE)
+
         /** The unit found by an earlier version of Lull, with its name, for carrying over to a link made with a unit. */
-        fun legacyUnit(context: Context): Pair<String, String?>? {
-            val prefs = context.getSharedPreferences("BedJetKit", Context.MODE_PRIVATE)
+        fun legacyUnit(prefs: SharedPreferences): Pair<String, String?>? {
             val unit = prefs.getString(LEGACY_UNIT_KEY, null) ?: return null
             return unit to prefs.getString(LEGACY_NAME_KEY, null)
+        }
+
+        /** Drops what was kept to ask another phone for this unit. The unit itself is left as it is. */
+        fun forget(context: Context, unit: String) {
+            preferences(context).edit().remove(nameKey(unit)).apply()
+        }
+
+        fun isBedJet(result: ScanResult): Boolean {
+            val record = result.scanRecord
+            if (record?.serviceUuids?.contains(ParcelUuid(SERVICE)) == true) return true
+            val name = record?.deviceName ?: result.device.name ?: ""
+            return name.uppercase().startsWith("BEDJET")
+        }
+
+        /** What can be told from an advertisement. A V2 is recognised by its name, which proves less. */
+        fun generation(result: ScanResult): Generation? {
+            val services = result.scanRecord?.serviceUuids.orEmpty()
+            if (ParcelUuid(SERVICE) in services) return Generation.V3
+            if (ParcelUuid(UART_SERVICE) in services) return Generation.V2
+            return null
         }
 
         private fun uuid(short: String): UUID = UUID.fromString("0000$short-BED0-0080-AA55-4265644A6574")
@@ -122,7 +143,7 @@ class BleLink(
         /** How long a request is advertised. Shorter than the courtesy, so one request is answered once. */
         private const val REQUEST_DURATION_MS = 8_000L
         /**
-         * How long a unit gets to accept a connection before Lull scans for any BedJet instead.
+         * How long a known unit gets to accept a connection before Lull scans for it instead.
          * Longer than the request, so another phone has time to hand the unit over.
          */
         private const val CONNECT_PATIENCE_MS = 12_000L
@@ -131,7 +152,7 @@ class BleLink(
         private const val LINK_GONE = -1
     }
 
-    private val prefs = context.getSharedPreferences("BedJetKit", Context.MODE_PRIVATE)
+    private val prefs = preferences(context)
     private val main = Handler(Looper.getMainLooper())
     private val scope = MainScope()
     private val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
@@ -228,13 +249,6 @@ class BleLink(
         val generation = requestGeneration
         advertise(request)
         main.postDelayed({ if (requestGeneration == generation) stopRequesting() }, REQUEST_DURATION_MS)
-    }
-
-    /** Forgets the unit so the link pairs with whichever BedJet is nearest. */
-    fun forget() {
-        unit?.let { prefs.edit().remove(nameKey(it)).apply() }
-        unit = null
-        gatt?.disconnect()
     }
 
     override suspend fun send(command: ByteArray) {
@@ -349,8 +363,8 @@ class BleLink(
     }
 
     /**
-     * A remembered unit that was replaced, reset or moved away never answers. Give it a while, then
-     * look for any BedJet instead.
+     * A unit that was reset or moved away may never answer that attempt. Give it a while, then scan
+     * for it instead.
      */
     private fun expectAnswer(target: BluetoothGatt) {
         connectGeneration += 1
@@ -449,7 +463,7 @@ class BleLink(
                     if (forRequests) {
                         // The only thing scanned for while connected is another phone asking for this BedJet.
                         if (state == LinkState.READY) handOver()
-                    } else if (gatt == null && isBedJet(result) && accepts(result.device.address)) {
+                    } else if (gatt == null && isBedJet(result) && takes(result.device.address, boundTo = unit)) {
                         connect(result.device)
                     }
                 }
@@ -467,13 +481,6 @@ class BleLink(
         scanning = callback
         val mode = if (forRequests) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_LATENCY
         scanner.startScan(filter?.let(::listOf), ScanSettings.Builder().setScanMode(mode).build(), callback)
-    }
-
-    private fun isBedJet(result: ScanResult): Boolean {
-        val record = result.scanRecord
-        if (record?.serviceUuids?.contains(ParcelUuid(SERVICE)) == true) return true
-        val name = record?.deviceName ?: result.device.name ?: ""
-        return name.uppercase().startsWith("BEDJET")
     }
 
     private fun stopScan() {
@@ -697,7 +704,7 @@ class BleLink(
                     connectGeneration += 1
                     skipsRememberedUnit = false
                     // Qualified: inside this initializer, plain `unit` is the constructor's parameter.
-                    if (this@BleLink.unit != gatt.device.address) {
+                    if (this@BleLink.unit == null) {
                         this@BleLink.unit = gatt.device.address
                         adoptLegacyName(gatt.device.address)
                     }

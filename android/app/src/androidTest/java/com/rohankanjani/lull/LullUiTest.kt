@@ -170,19 +170,39 @@ class LullUiTest {
         compose.capture("history-row-expanded")
     }
 
+    private fun pill(title: String) = labelStartsWith("BedJet, $title,")
+
+    /** A row in a list of BedJets, by its name and any code after it. */
+    private fun row(title: String) = labelStartsWith("$title,")
+
+    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false) {
+        scenario.close()
+        scenario = launchLull(ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway)
+    }
+
+    /** Opens the BedJet sheet's list of BedJets nearby and picks the second simulated one, which shares a name. */
+    private fun addSecondBedJet(from: SemanticsMatcher) {
+        compose.onNode(from).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Add Another BedJet").performScrollTo().performClick()
+        val other = row("BEDJET-DEMO · 5F2C")
+        compose.waitFor(other)
+        compose.capture("nearby-bedjets")
+        compose.onNode(other).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Done").performClick()
+    }
+
     @Test
     fun addAndSwitchBedJets() {
         compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
 
-        // With one BedJet the pill says how it's connected, and its settings offer to add another.
-        compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
-        compose.waitFor(hasText("Done"))
-        compose.onNodeWithText("Add Another BedJet").performScrollTo().performClick()
-        compose.onNodeWithText("Done").performClick()
+        // With one BedJet the pill names it and says how it's connected; its settings offer to add another.
+        addSecondBedJet(from = pill("BEDJET-DEMO"))
 
-        // With two, the pill names the BedJet on screen instead.
-        val second = hasContentDescription("BedJet, BEDJET-DEMO-2,", substring = true)
-        val first = hasContentDescription("BedJet, BEDJET-DEMO,", substring = true)
+        // Two share a name, so each carries a code from its Bluetooth identity.
+        val second = pill("BEDJET-DEMO · 5F2C")
+        val first = pill("BEDJET-DEMO · D3A0")
         compose.waitFor(second)
         Thread.sleep(2000)
         compose.onNodeWithText("Heat").performClick()
@@ -190,18 +210,80 @@ class LullUiTest {
 
         // The pill switches BedJets, and each keeps its own state.
         compose.onNode(second).performClick()
-        compose.waitFor(hasText("BEDJET-DEMO"))
+        compose.waitFor(hasText("BEDJET-DEMO · D3A0"))
         compose.capture("bedjet-switcher")
-        compose.onNodeWithText("BEDJET-DEMO").performClick()
+        compose.onNodeWithText("BEDJET-DEMO · D3A0").performClick()
         compose.waitFor(first)
         compose.waitUntilGone(hasContentDescription("Turns off in"))
 
         compose.onNode(first).performClick()
-        compose.waitFor(hasText("BEDJET-DEMO-2"))
-        compose.onNodeWithText("BEDJET-DEMO-2").performClick()
+        compose.waitFor(hasText("BEDJET-DEMO · 5F2C"))
+        compose.onNodeWithText("BEDJET-DEMO · 5F2C").performClick()
         compose.waitFor(second)
         compose.waitFor(hasContentDescription("Turns off in"))
         compose.onNodeWithText("Off").performClick()
+    }
+
+    @Test
+    fun choosesABedJetBeforeAnything() {
+        relaunch(demoChoose = true)
+        // Nothing is connected or controllable until a BedJet is picked.
+        compose.waitFor(hasText("Choose Your BedJet"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Remote").assertDoesNotExist()
+        val partners = row("BEDJET-DEMO · 5F2C")
+        compose.waitFor(partners)
+        compose.onNode(row("BEDJET-DEMO · D3A0")).assertExists()
+        compose.capture("choose-first")
+        compose.onNode(partners).performScrollTo().performClick()
+
+        compose.waitFor(pill("BEDJET-DEMO"))
+        compose.waitFor(hasText("Remote") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected))
+    }
+
+    @Test
+    fun forgettingTheBedJetOnScreenAsksWhichToShow() {
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        addSecondBedJet(from = pill("BEDJET-DEMO"))
+
+        compose.waitFor(pill("BEDJET-DEMO · 5F2C"))
+        compose.onNode(pill("BEDJET-DEMO · 5F2C")).performClick()
+        compose.waitFor(hasText("BedJet Settings"))
+        compose.onNodeWithText("BedJet Settings").performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Forget This BedJet").performScrollTo().performClick()
+
+        // The other BedJet is offered rather than shown in its place.
+        compose.waitFor(hasText("Choose Your BedJet"))
+        val remaining = row("BEDJET-DEMO")
+        compose.waitFor(remaining)
+        compose.waitFor(row("BEDJET-DEMO · 5F2C"))
+        compose.capture("after-forget")
+        compose.onNode(remaining).performScrollTo().performClick()
+        compose.waitFor(pill("BEDJET-DEMO"))
+    }
+
+    @Test
+    fun anAbsentBedJetIsNotSwappedForAnother() {
+        relaunch(demoFirstUnitAway = true)
+        // Lull keeps looking for the chosen BedJet, then says it can't find it, with others right there.
+        val notFound = hasContentDescription("BedJet, BEDJET-DEMO, Not found")
+        compose.waitFor(notFound, timeoutMillis = 25_000)
+        compose.onNode(notFound).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Choose Another BedJet").performScrollTo()
+        compose.capture("not-found")
+        compose.onNodeWithText("Choose Another BedJet").performClick()
+        val other = row("BEDJET-DEMO · 5F2C")
+        compose.waitFor(other)
+        compose.onNode(other).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Done").performClick()
+
+        // Only because it was picked; the missing one is still there to go back to.
+        val picked = pill("BEDJET-DEMO · 5F2C")
+        compose.waitFor(picked)
+        compose.onNode(picked).performClick()
+        compose.waitFor(hasText("BEDJET-DEMO · D3A0"))
     }
 
     @Test
@@ -240,13 +322,22 @@ fun launchLull(
     demoElapsedMinutes: Int = 0,
     demoLabelConnected: Boolean = false,
     demoHistory: Boolean = false,
+    demoChoose: Boolean = false,
+    demoFirstUnitAway: Boolean = false,
 ): ActivityScenario<MainActivity> {
     val intent = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
         .putExtra("ephemeral", ephemeral)
         .putExtra("demoHistory", demoHistory)
         .putExtra("demoElapsedMinutes", demoElapsedMinutes)
         .putExtra("demoLabelConnected", demoLabelConnected)
+        .putExtra("demoChoose", demoChoose)
+        .putExtra("demoFirstUnitAway", demoFirstUnitAway)
     return ActivityScenario.launch(intent)
+}
+
+/** A node whose spoken label begins with this, so "BEDJET-DEMO," doesn't also find "BEDJET-DEMO · 5F2C,". */
+fun labelStartsWith(prefix: String) = SemanticsMatcher("label starts with \"$prefix\"") { node ->
+    node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it.startsWith(prefix) }
 }
 
 fun ComposeTestRule.waitFor(matcher: SemanticsMatcher, timeoutMillis: Long = 5_000) {

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -75,7 +76,7 @@ fun ScheduleScreen(model: AppModel) {
     val today = LocalDate.now().format(
         DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEMMMd")),
     )
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     val run = bedJet.run
     /** The schedule shown in the large card: the one running, otherwise the one picked for tonight. */
     val featuredID = run?.schedule?.id ?: bedJet.tonight?.id
@@ -140,7 +141,7 @@ private fun scheduleActions(model: AppModel, schedule: Schedule) = listOf(
 
 @Composable
 private fun Planned(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> Unit) {
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     WithMenu(model, schedule, onEdit) { openMenu ->
         Card(Modifier.combinedClickable(onClick = {}, onLongClick = openMenu, indication = null, interactionSource = null)) {
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -165,9 +166,16 @@ private fun Planned(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> U
                     )
                 }
                 NightTimeline(model, schedule, startMinute = minuteOfDay(System.currentTimeMillis()))
+                val problem = bedJet.problem(schedule)
+                if (problem != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.WarningAmber, null, tint = Theme.secondary, modifier = Modifier.size(18.dp))
+                        Text(problem, fontSize = 13.sp, color = Theme.secondary)
+                    }
+                }
                 PrimaryButton(
                     onClick = { model.scope.launch { bedJet.startTonight() } },
-                    enabled = bedJet.canControl && !bedJet.isBusy,
+                    enabled = bedJet.canControl && !bedJet.isBusy && problem == null,
                     label = "Start Night",
                     modifier = Modifier.semantics { if (bedJet.isBusy) stateDescription = "Starting" },
                 ) {
@@ -193,7 +201,7 @@ private fun Planned(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> U
 /** Shown instead of the planned card when the BedJet is already running a schedule this phone didn't start. */
 @Composable
 private fun RunningElsewhere(model: AppModel, step: Int) {
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     Card {
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -215,7 +223,7 @@ private fun RunningElsewhere(model: AppModel, step: Int) {
 
 @Composable
 private fun Running(model: AppModel, run: ActiveRun, now: Long) {
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     val current = run.phase(now)
     Card {
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -249,8 +257,9 @@ private fun ModeLabel(mode: Mode, text: String, spoken: String) {
 
 @Composable
 private fun ScheduleRow(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> Unit) {
+    val bedJet = LocalBedJet.current
     // Swapping schedules waits until the one that is running has ended.
-    val canSwap = model.bedJet.run == null
+    val canSwap = bedJet.run == null
     // At the largest text sizes Use Tonight goes under the card rather than over its corner.
     val beneath = isLargeText()
     val phases = "${schedule.phases.size} ${if (schedule.phases.size == 1) "phase" else "phases"}"
@@ -291,15 +300,16 @@ private fun ScheduleRow(model: AppModel, schedule: Schedule, onEdit: (Schedule) 
 
 @Composable
 private fun UseTonight(model: AppModel, schedule: Schedule, modifier: Modifier) {
+    val bedJet = LocalBedJet.current
     Pill(
         modifier
             .heightIn(min = 32.dp)
             .clearAndSetSemantics {
                 contentDescription = "Use ${schedule.name} tonight"
                 role = Role.Button
-                onClick { model.bedJet.tonightID = schedule.id; true }
+                onClick { bedJet.tonightID = schedule.id; true }
             },
-        onClick = { model.bedJet.tonightID = schedule.id },
+        onClick = { bedJet.tonightID = schedule.id },
     ) {
         Text("Use Tonight", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 6.dp))
     }

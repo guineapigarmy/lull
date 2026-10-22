@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
 /** Direct control, for when you want air right now rather than a schedule. */
 @Composable
 fun RemoteScreen(model: AppModel) {
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     val status = bedJet.status
     val mode = status?.mode ?: Mode.STANDBY
     var temperature by remember { mutableIntStateOf(60) }
@@ -99,7 +99,10 @@ fun RemoteScreen(model: AppModel) {
     }
 
     LaunchedEffect(bedJet.id) {
-        // Another BedJet's settings show straight away.
+        // Another BedJet's settings show straight away, and a slider change still on its way is dropped
+        // rather than sent once this BedJet is no longer the one on screen.
+        for (job in pending.values) job.cancel()
+        pending.clear()
         followAfter = 0
         chosenMode = null
     }
@@ -229,7 +232,7 @@ fun TemperatureSlider(
 /** The glowing live readout: what the BedJet is doing this second. */
 @Composable
 fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
-    val bedJet = model.bedJet
+    val bedJet = LocalBedJet.current
     val mode = status?.mode ?: Mode.STANDBY
     val isOn = status?.isRunning ?: false
     val tint by animateColorAsState(mode.tint, tween(600), label = "tint")
@@ -237,7 +240,7 @@ fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
     // Grows with the text inside it, up to what fits across a phone.
     val diameter = (204.dp * LocalDensity.current.fontScale).coerceAtMost(320.dp)
     val spoken = when {
-        status == null -> "Looking for your BedJet"
+        status == null -> "Looking for ${model.title(bedJet)}"
         !status.isRunning -> "Off, room ${model.degrees(status.ambientTemperature)}"
         else -> buildList {
             add(status.mode.activity)
@@ -286,7 +289,7 @@ fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
             } else {
                 CircularProgressIndicator(color = Theme.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                 Text(
-                    if (model.hasSeveralBedJets) "Looking for ${model.title(bedJet)}" else "Looking for your BedJet",
+                    "Looking for ${model.title(bedJet)}",
                     fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 8.dp),
                 )

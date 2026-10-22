@@ -42,7 +42,8 @@ final class AccessibilityTests: XCTestCase {
         let navigationBar = app.navigationBars.firstMatch
         let hasNavigationBar = navigationBar.exists && navigationBar.isHittable
         let top = hasNavigationBar ? navigationBar.frame.maxY : 62
-        var bottom = CGFloat.infinity
+        // Without a bar, the bottom edge fades what scrolls under it, the same way.
+        var bottom = app.windows.firstMatch.frame.maxY - 40
         let tabBar = app.tabBars.firstMatch
         if tabBar.exists && tabBar.isHittable { bottom = tabBar.frame.minY }
         let bottomBar = app.buttons["Use Tonight"]
@@ -110,7 +111,12 @@ final class AccessibilityTests: XCTestCase {
         reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet,'")).firstMatch).tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
         try audit("device")
-        app.buttons["Done"].tap()
+        // BedJets nearby, each row read with its kind and signal.
+        reveal(app.buttons["Add Another BedJet"]).tap()
+        XCTAssertTrue(element("label == 'BEDJET-DEMO · 5F2C, BedJet 3, fair signal'").waitForExistence(timeout: 5))
+        try audit("nearby")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        reveal(app.buttons["Done"]).tap()
 
         app.tabBars.buttons["Schedule"].tap()
         let start = app.buttons["Start Night"]

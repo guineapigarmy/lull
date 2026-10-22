@@ -4,6 +4,7 @@ import SwiftUI
 /// Direct control, for when you want air right now rather than a schedule.
 struct RemoteView: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     @State private var temperature = 60
     @State private var fan = 40.0
     @State private var runtime = 60.0
@@ -14,7 +15,6 @@ struct RemoteView: View {
     @State private var chosenMode: Mode?
 
     var body: some View {
-        let bedJet = model.bedJet
         let status = bedJet.status
         let mode = status?.mode ?? .standby
         Screen(title: "Remote") {
@@ -85,7 +85,10 @@ struct RemoteView: View {
             runtime = min(max(Double(minutesLeft(status)), limit.range.lowerBound), limit.range.upperBound)
         }
         .onChange(of: bedJet.id) {
-            // Another BedJet's settings show straight away.
+            // Another BedJet's settings show straight away, and a slider change still on its way is dropped
+            // rather than sent once this BedJet is no longer the one on screen.
+            for task in pending.values { task.cancel() }
+            pending = [:]
             followAfter = .distantPast
             chosenMode = nil
         }
@@ -123,6 +126,7 @@ struct RemoteView: View {
 /// The glowing live readout: what the BedJet is doing this second.
 struct ClimateOrb: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     let status: DeviceStatus?
     /// Grows with the text inside it, up to what fits across a phone.
     @ScaledMetric(relativeTo: .largeTitle) private var diameter: CGFloat = 204
@@ -144,7 +148,7 @@ struct ClimateOrb: View {
                 if let status {
                     // White, unlike other labels, so it stays readable over the glow.
                     Eyebrow(mode.activity, color: .white)
-                    Text(isOn && model.bedJet.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
+                    Text(isOn && bedJet.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
                         .scaledFont(60, .light)
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -159,7 +163,7 @@ struct ClimateOrb: View {
                         .minimumScaleFactor(0.7)
                 } else {
                     ProgressView()
-                    Text(model.hasSeveralBedJets ? "Looking for \(model.title(of: model.bedJet))" : "Looking for your BedJet")
+                    Text("Looking for \(model.title(of: bedJet))")
                         .scaledFont(15, .medium)
                         .foregroundStyle(Theme.secondary)
                         .multilineTextAlignment(.center)
@@ -176,10 +180,10 @@ struct ClimateOrb: View {
     }
 
     private var spokenStatus: String {
-        guard let status else { return "Looking for your BedJet" }
+        guard let status else { return "Looking for \(model.title(of: bedJet))" }
         guard status.isRunning else { return "Off, room \(model.degrees(status.ambientTemperature))" }
         var parts = [status.mode.activity]
-        if model.bedJet.adjustsTemperature(status.mode) { parts.append("set to \(model.degrees(status.targetTemperature))") }
+        if bedJet.adjustsTemperature(status.mode) { parts.append("set to \(model.degrees(status.targetTemperature))") }
         parts.append("fan \(status.fanPercent)%")
         parts.append("air \(model.degrees(status.actualTemperature))")
         return parts.joined(separator: ", ")

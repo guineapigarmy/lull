@@ -2,8 +2,9 @@
 import CryptoKit
 import Foundation
 
-/// CoreBluetooth transport for a BedJet 3 or V2. Connects to the unit it was given, or the first one found.
-/// Several links can run side by side, one per BedJet; `accepts` keeps them from taking each other's unit.
+/// CoreBluetooth transport for a BedJet 3 or V2. A link made for a unit only ever connects to that unit, so
+/// several can run side by side, one per BedJet, and none silently swaps in another BedJet. Without a unit
+/// (`bedjetctl`) it takes the first one found.
 ///
 /// The BedJet 3 has its own GATT service. The V2 sends its serial protocol (`CodecV2`) through a
 /// Microchip "transparent UART" service, which other gadgets use too, so a V2 is recognised by its name.
@@ -27,12 +28,8 @@ public final class BLELink: NSObject, BedJetLink {
     /// Return false to postpone a hand-over, for example while a schedule is being saved.
     public var canYield: () -> Bool = { true }
     public private(set) var lastConnection: ConnectionTiming?
-    /// The unit this link belongs to, known once one has connected.
+    /// The unit this link belongs to: the one it was made for, or the first found by a link made without one.
     public private(set) var unit: UUID?
-    /// The unit being connected to or connected, which may not be `unit` yet.
-    public var unitInUse: UUID? { peripheral?.identifier }
-    /// Whether a BedJet found by scanning may be used, so links for different BedJets never swap units.
-    public var accepts: (UUID) -> Bool = { _ in true }
 
     private static func uuid(_ short: String) -> CBUUID { CBUUID(string: "0000\(short)-BED0-0080-AA55-4265644A6574") }
     private static let service = uuid("1000")
@@ -51,7 +48,7 @@ public final class BLELink: NSObject, BedJetLink {
     private static let courtesy: TimeInterval = 10
     /// How long a request is advertised. Shorter than `courtesy`, so one request is answered once.
     private static let requestDuration: TimeInterval = 8
-    /// How long a unit gets to accept a connection before Lull scans for any BedJet instead.
+    /// How long a known unit gets to accept a connection before Lull scans for it instead.
     /// Longer than `requestDuration`, so another phone has time to hand the unit over.
     private static let connectPatience: TimeInterval = 12
 
@@ -84,12 +81,18 @@ public final class BLELink: NSObject, BedJetLink {
     private var operation = 0
 
     /// The unit found by an earlier version of Lull, for carrying over to a link made with `init(unit:)`.
-    public static var legacyUnit: (unit: UUID, name: String?)? {
-        guard let unit = UserDefaults.standard.string(forKey: legacyUnitKey).flatMap(UUID.init) else { return nil }
-        return (unit, UserDefaults.standard.string(forKey: legacyNameKey))
+    public static func legacyUnit(in defaults: UserDefaults = .standard) -> (unit: UUID, name: String?)? {
+        guard let unit = defaults.string(forKey: legacyUnitKey).flatMap(UUID.init) else { return nil }
+        return (unit, defaults.string(forKey: legacyNameKey))
     }
 
-    /// - Parameter unit: The BedJet to connect to, from an earlier `unit`. Without one, the first BedJet found is used.
+    /// Whether a unit found by scanning is the one a link is for. Another BedJet is never taken in its place,
+    /// even when the right one is away: it could be a partner's.
+    public static func takes(_ found: UUID, boundTo unit: UUID?) -> Bool {
+        unit.map { $0 == found } ?? true
+    }
+
+    /// - Parameter unit: The BedJet to connect to. Without one, the first BedJet found is used.
     public init(unit: UUID? = nil) {
         self.unit = unit
         super.init()
@@ -155,11 +158,9 @@ public final class BLELink: NSObject, BedJetLink {
         }
     }
 
-    /// Forgets the unit so the link pairs with whichever BedJet is nearest.
-    public func forget() {
-        if let unit { UserDefaults.standard.removeObject(forKey: Self.nameKey(of: unit)) }
-        unit = nil
-        if let peripheral { central?.cancelPeripheralConnection(peripheral) }
+    /// Drops what was kept to ask another phone for this unit. The unit itself is left as it is.
+    public static func forget(_ unit: UUID) {
+        UserDefaults.standard.removeObject(forKey: nameKey(of: unit))
     }
 
     public func send(_ data: Data) async throws {
@@ -217,8 +218,8 @@ public final class BLELink: NSObject, BedJetLink {
         expectAnswer(from: target)
     }
 
-    /// CoreBluetooth waits for a unit forever, and a remembered one that was replaced, reset or
-    /// moved away never answers. Give it a while, then look for any BedJet instead.
+    /// CoreBluetooth waits for a unit forever, and one that was reset or moved away may never answer
+    /// that attempt. Give it a while, then scan for it instead.
     private func expectAnswer(from target: CBPeripheral) {
         connectGeneration += 1
         let generation = connectGeneration
@@ -269,7 +270,7 @@ public final class BLELink: NSObject, BedJetLink {
     /// The name is needed to ask for the BedJet before it has connected, so it carries over from
     /// versions that remembered one BedJet.
     private static func adoptLegacyName(for unit: UUID) {
-        guard UserDefaults.standard.string(forKey: nameKey(of: unit)) == nil, let legacy = legacyUnit,
+        guard UserDefaults.standard.string(forKey: nameKey(of: unit)) == nil, let legacy = legacyUnit(),
               legacy.unit == unit, let name = legacy.name else { return }
         UserDefaults.standard.set(name, forKey: nameKey(of: unit))
     }
@@ -415,11 +416,19 @@ public final class BLELink: NSObject, BedJetLink {
         }
     }
 
-    private static func isBedJet(_ peripheral: CBPeripheral, advertisement: [String: Any]) -> Bool {
+    static func isBedJet(_ peripheral: CBPeripheral, advertisement: [String: Any]) -> Bool {
         let services = advertisement[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
         if services.contains(service) { return true }
         let name = advertisement[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? ""
         return name.uppercased().hasPrefix("BEDJET")
+    }
+
+    /// What can be told from an advertisement. A V2 is recognised by its name, which proves less.
+    static func generation(advertisement: [String: Any]) -> Generation? {
+        let services = advertisement[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+        if services.contains(service) { return .v3 }
+        if services.contains(uartService) { return .v2 }
+        return nil
     }
 }
 
@@ -447,7 +456,7 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate {
                 return
             }
             guard self.peripheral == nil, Self.isBedJet(peripheral, advertisement: advertisementData),
-                  accepts(peripheral.identifier) else { return }
+                  Self.takes(peripheral.identifier, boundTo: unit) else { return }
             connect(peripheral)
         }
     }
@@ -456,7 +465,7 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate {
         MainActor.assumeIsolated {
             connectGeneration += 1
             skipsRememberedUnit = false
-            if unit != peripheral.identifier {
+            if unit == nil {
                 unit = peripheral.identifier
                 Self.adoptLegacyName(for: peripheral.identifier)
             }

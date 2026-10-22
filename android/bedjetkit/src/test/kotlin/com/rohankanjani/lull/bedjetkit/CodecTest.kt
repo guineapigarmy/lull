@@ -112,6 +112,12 @@ class CodecTest {
     }
 
     @Test
+    fun simulatedBedJetsGoByTheirOwnNames() = runTest {
+        assertEquals(DemoLink.DEFAULT_NAME, DemoLink().deviceName())
+        assertEquals("BEDJET-DEMO-2", DemoLink(name = "BEDJET-DEMO-2").deviceName())
+    }
+
+    @Test
     fun runtimeCommandSplitsHoursAndMinutes() {
         assertArrayEquals(byteArrayOf(0x02, 2, 30), Codec.setRuntime(150))
     }
@@ -132,7 +138,7 @@ class CodecTest {
     @Test
     fun storeAndReadBackThroughSimulatedDevice() = runTest {
         val old = StoredProgram("old", listOf(ProgramStep(Mode.DRY, fanStep = 1, temperature = 60, hours = 1, minutes = 0)))
-        val link = DemoLink(listOf(old, null, null))
+        val link = DemoLink(slots = listOf(old, null, null))
         val steps = (0 until 11).map {
             ProgramStep(if (it % 2 == 0) Mode.COOL else Mode.HEAT, fanStep = it, temperature = 50, hours = 0, minutes = 20 + it)
         }
@@ -187,7 +193,7 @@ class CodecTest {
     @Test
     fun unitRefusesAProgramItCannotFinishUntilAcknowledged() = runTest {
         val tooHot = ProgramStep(Mode.HEAT, fanStep = 19, temperature = 80, hours = 3, minutes = 0)
-        val link = DemoLink(listOf(StoredProgram("too hot", listOf(tooHot)), null, null))
+        val link = DemoLink(slots = listOf(StoredProgram("too hot", listOf(tooHot)), null, null))
         var latest: DeviceStatus? = null
         link.onStatus = { latest = it }
         link.startProgram(0)

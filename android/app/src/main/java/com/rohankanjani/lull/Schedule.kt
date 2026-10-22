@@ -170,6 +170,16 @@ object Format {
         return LocalTime.of(minute / 60, minute % 60).format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))
     }
 
+    /** A duration in words, for TalkBack: "2 hours, 30 minutes" rather than "2 hr 30 min". */
+    fun spokenDuration(minutes: Int): String {
+        val hours = minutes / 60
+        val rest = minutes % 60
+        val parts = mutableListOf<String>()
+        if (hours > 0) parts += if (hours == 1) "1 hour" else "$hours hours"
+        if (rest > 0 || hours == 0) parts += if (rest == 1) "1 minute" else "$rest minutes"
+        return parts.joinToString(", ")
+    }
+
     fun duration(minutes: Int): String {
         val hours = minutes / 60
         val rest = minutes % 60

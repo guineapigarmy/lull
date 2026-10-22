@@ -51,7 +51,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -103,14 +111,21 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                 ) {
                     BasicTextField(
                         value = schedule.name,
-                        // The BedJet stores 15 characters.
-                        onValueChange = { schedule = schedule.copy(name = it.take(Limits.NAME_LENGTH)) },
+                        onValueChange = { name ->
+                            // Wraps rather than clipping a long name at large text sizes; Return still finishes editing.
+                            if (name.contains('\n')) {
+                                schedule = schedule.copy(name = name.replace("\n", "").take(Limits.NAME_LENGTH))
+                                focus.clearFocus()
+                                return@BasicTextField
+                            }
+                            // The BedJet stores 15 characters.
+                            schedule = schedule.copy(name = name.take(Limits.NAME_LENGTH))
+                        },
                         textStyle = TextStyle(fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Color.White),
                         cursorBrush = SolidColor(Color.White),
-                        singleLine = true,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Name" },
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Schedule name, up to ${Limits.NAME_LENGTH} characters" },
                         decorationBox = { field ->
                             if (schedule.name.isEmpty()) Text("Name", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Theme.tertiary)
                             field()
@@ -118,15 +133,17 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                     )
 
                     Card(Modifier.animateContentSize()) {
-                        NightTimeline(schedule, selection = selection, height = 170.dp)
+                        NightTimeline(model, schedule, selection = selection, height = 170.dp)
                     }
 
                     Card(padding = 16.dp) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        val label = @Composable {
+                            Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Text("Usual bedtime", fontSize = 17.sp, fontWeight = FontWeight.Medium)
                                 Text("Wake around ${Format.clock(schedule.bedtime + schedule.totalMinutes)}", fontSize = 13.sp, color = Theme.secondary)
                             }
+                        }
+                        val time = @Composable {
                             Text(
                                 Format.clock(schedule.bedtime),
                                 fontSize = 17.sp,
@@ -134,16 +151,36 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(Theme.raised)
-                                    .clickable(role = Role.Button) { picksBedtime = true }
+                                    .clickable(role = Role.Button, onClickLabel = "Change bedtime") { picksBedtime = true }
+                                    .semantics { contentDescription = "Bedtime, ${Format.clock(schedule.bedtime)}" }
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                             )
                         }
+                        // At the largest text sizes the time goes under its label rather than squeezing it into a sliver.
+                        if (isLargeText()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                label()
+                                time()
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.weight(1f)) { label() }
+                                time()
+                            }
+                        }
                     }
 
-                    Eyebrow("Phases")
+                    Eyebrow("Phases", Modifier.semantics { heading() })
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        schedule.phases.forEach { phase ->
-                            PhaseRow(model, phase, schedule.startMinute(phase)) { selection = phase.id }
+                        schedule.phases.forEachIndexed { index, phase ->
+                            PhaseRow(
+                                model, phase, number = index + 1, startsAt = schedule.startMinute(phase),
+                                onDelete = if (schedule.phases.size > 1) {
+                                    { schedule = schedule.copy(phases = schedule.phases.filter { it.id != phase.id }) }
+                                } else {
+                                    null
+                                },
+                            ) { selection = phase.id }
                         }
                     }
                     if (schedule.phases.size < Limits.STEPS_PER_PROGRAM) {
@@ -167,7 +204,7 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                         "Use Tonight",
                         onClick = {
                             model.save(schedule)
-                            model.tonightID = schedule.id
+                            model.bedJet.tonightID = schedule.id
                             onDismiss()
                         },
                         enabled = isValid,
@@ -231,36 +268,65 @@ private fun BedtimePicker(minuteOfDay: Int, onPick: (Int) -> Unit, onDismiss: ()
 }
 
 @Composable
-private fun PhaseRow(model: AppModel, phase: Phase, startsAt: Int, onClick: () -> Unit) {
+private fun PhaseRow(
+    model: AppModel,
+    phase: Phase,
+    number: Int,
+    startsAt: Int,
+    /** Null when this is the only phase, which can't be removed. */
+    onDelete: (() -> Unit)?,
+    onClick: () -> Unit,
+) {
     val detail = buildList {
-        if (model.adjustsTemperature(phase.mode)) add(model.degrees(phase.temperature))
+        if (model.bedJet.adjustsTemperature(phase.mode)) add(model.degrees(phase.temperature))
         if (phase.mode.usesFan) add("Fan ${phase.fanPercent}%")
     }.ifEmpty { listOf("Air off") }.joinToString(" · ")
     val shape = RoundedCornerShape(22.dp)
+    // At the largest text sizes the timing moves under the mode instead of beside it.
+    val large = isLargeText()
+    val badge = (40.dp * LocalDensity.current.fontScale).coerceAtMost(56.dp)
+    val mode = @Composable {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(badge).background(phase.mode.tint.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
+                Icon(phase.mode.icon, null, tint = phase.mode.tint, modifier = Modifier.size(18.dp))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(phase.mode.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(detail, fontSize = 13.sp, color = Theme.secondary)
+            }
+        }
+    }
+    val timing = @Composable {
+        Column(horizontalAlignment = if (large) Alignment.Start else Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(Format.duration(phase.minutes), fontSize = 15.sp, fontWeight = FontWeight.Medium, style = Theme.tabular)
+            Text(Format.clock(startsAt), fontSize = 13.sp, color = Theme.secondary, style = Theme.tabular)
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(Theme.surface)
             .border(BorderStroke(1.dp, Theme.hairline), shape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) {
-                contentDescription = "${phase.mode.title}, $detail, ${Format.duration(phase.minutes)}, ${Format.clock(startsAt)}"
+            .clickable(role = Role.Button, onClickLabel = "Edit this phase", onClick = onClick)
+            .clearAndSetSemantics {
+                contentDescription = "Phase $number, ${model.spokenSummary(phase)}, starts ${Format.clock(startsAt)}"
+                role = Role.Button
+                onClick(label = "Edit this phase") { onClick(); true }
+                if (onDelete != null) customActions = listOf(CustomAccessibilityAction("Remove Phase") { onDelete(); true })
             }
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Box(Modifier.size(40.dp).background(phase.mode.tint.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(phase.mode.icon, null, tint = phase.mode.tint, modifier = Modifier.size(18.dp))
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(phase.mode.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Text(detail, fontSize = 13.sp, color = Theme.secondary)
-        }
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(Format.duration(phase.minutes), fontSize = 15.sp, fontWeight = FontWeight.Medium, style = Theme.tabular)
-            Text(Format.clock(startsAt), fontSize = 13.sp, color = Theme.secondary, style = Theme.tabular)
+        if (large) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                mode()
+                timing()
+            }
+        } else {
+            Box(Modifier.weight(1f)) { mode() }
+            timing()
         }
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Theme.tertiary, modifier = Modifier.size(18.dp))
     }
@@ -287,11 +353,11 @@ private fun PhaseEditor(
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Phase", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Phase", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
                 Spacer(Modifier.weight(1f))
                 TextButton(onDismiss) { Text("Done", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White) }
             }
-            ModePicker(model.phaseModes, phase.mode) { mode ->
+            ModePicker(model.bedJet.phaseModes, phase.mode) { mode ->
                 onChange(
                     phase.copy(
                         mode = mode,
@@ -299,7 +365,7 @@ private fun PhaseEditor(
                     ),
                 )
             }
-            if (model.adjustsTemperature(phase.mode)) {
+            if (model.bedJet.adjustsTemperature(phase.mode)) {
                 TemperatureSlider(model, phase.mode, phase.temperature, onChange = { onChange(phase.copy(temperature = it)) })
             }
             if (phase.mode.usesFan) {
@@ -313,11 +379,12 @@ private fun PhaseEditor(
                 "Duration", Format.duration(phase.minutes), phase.minutes.toFloat(),
                 onValueChange = { onChange(phase.copy(minutes = it.toInt())) },
                 range = 5f..(phase.maxMinutes / 5 * 5).toFloat(), step = 5f,
+                spokenValue = Format.spokenDuration(phase.minutes),
             )
             if (isHeatLimited) {
                 Text(
                     "At this temperature and fan, BedJet heats for up to ${Format.duration(phase.maxMinutes)} before its safety cut-off." +
-                        if (model.generation.supports(Mode.EXTENDED_HEAT)) " Use Gentle heat to run longer." else "",
+                        if (model.bedJet.generation.supports(Mode.EXTENDED_HEAT)) " Use Gentle heat to run longer." else "",
                     fontSize = 13.sp, color = Theme.secondary,
                 )
             }
@@ -329,7 +396,8 @@ private fun PhaseEditor(
                         .align(Alignment.CenterHorizontally)
                         .clip(RoundedCornerShape(8.dp))
                         .clickable(role = Role.Button, onClick = onDelete)
-                        .padding(8.dp),
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                 )
             }
         }

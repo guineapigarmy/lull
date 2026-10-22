@@ -76,11 +76,11 @@ class LullUiTest {
     @Test
     fun editScheduleAndUseItTonight() {
         compose.onNodeWithText("Schedule").performClick()
-        compose.onNodeWithContentDescription("Warm Welcome").performScrollTo().performClick()
+        compose.onNode(hasContentDescription("Warm Welcome,", substring = true)).performScrollTo().performClick()
         compose.waitFor(hasText("Add Phase"))
         compose.capture("editor")
 
-        compose.onNode(hasContentDescription("Turbo,", substring = true) and hasContentDescription("10 min", substring = true)).performClick()
+        compose.onNode(hasContentDescription("Turbo,", substring = true) and hasContentDescription("10 minutes", substring = true)).performClick()
         compose.waitFor(hasText("Remove Phase"))
         compose.onNodeWithText("Gentle heat").performClick()
         Thread.sleep(1000)
@@ -133,20 +133,20 @@ class LullUiTest {
         compose.waitFor(hasTestTag("Night"))
         val night = compose.onNodeWithTag("Night")
         assertTrue(night.label().endsWith("Cool Drift"))
-        compose.onNodeWithText("Turned off").assertDoesNotExist()
+        compose.onNode(hasContentDescription("Turned off", substring = true)).assertDoesNotExist()
         compose.capture("history-collapsed")
         night.performClick()
-        compose.waitFor(hasText("Heat ·", substring = true))
-        compose.onNodeWithText("Turned off").assertExists()
-        compose.onNodeWithText("Started Cool Drift").assertExists()
-        compose.onNodeWithText("Ended Cool Drift").assertExists()
+        compose.waitFor(hasContentDescription(", Heat,", substring = true))
+        compose.onNode(hasContentDescription("Turned off", substring = true)).assertExists()
+        compose.onNode(hasContentDescription("Started Cool Drift", substring = true)).assertExists()
+        compose.onNode(hasContentDescription("Ended Cool Drift", substring = true)).assertExists()
         // Nothing else: the schedule's first phase and the BedJet turning off with it are not separate entries.
-        assertEquals(0, compose.onAllNodes(hasText("Cool ·", substring = true)).fetchSemanticsNodes().size)
+        assertEquals(0, compose.onAllNodes(hasContentDescription(", Cool,", substring = true)).fetchSemanticsNodes().size)
         Thread.sleep(1000)
         compose.capture("history-expanded")
 
         night.performClick()
-        compose.waitUntilGone(hasText("Turned off"))
+        compose.waitUntilGone(hasContentDescription("Turned off", substring = true))
     }
 
     @Test
@@ -160,14 +160,48 @@ class LullUiTest {
         assertEquals(3, nights.fetchSemanticsNodes().size)
         // Newest first; a night without a schedule is summed up by its times instead.
         assertTrue(nights[0].label().endsWith("Cool Drift"))
-        assertTrue(nights[1].label().contains(" – "))
+        assertTrue(nights[1].label().contains(" to "))
         compose.capture("history-rows")
 
         nights[1].performClick()
-        compose.waitFor(hasText("Turned off"))
-        compose.onNodeWithText("Timer ran out", substring = true).assertExists()
+        compose.waitFor(hasContentDescription("Turned off", substring = true))
+        compose.onNode(hasContentDescription("Timer ran out", substring = true)).assertExists()
         Thread.sleep(1000)
         compose.capture("history-row-expanded")
+    }
+
+    @Test
+    fun addAndSwitchBedJets() {
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+
+        // With one BedJet the pill says how it's connected, and its settings offer to add another.
+        compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Add Another BedJet").performScrollTo().performClick()
+        compose.onNodeWithText("Done").performClick()
+
+        // With two, the pill names the BedJet on screen instead.
+        val second = hasContentDescription("BedJet, BEDJET-DEMO-2,", substring = true)
+        val first = hasContentDescription("BedJet, BEDJET-DEMO,", substring = true)
+        compose.waitFor(second)
+        Thread.sleep(2000)
+        compose.onNodeWithText("Heat").performClick()
+        compose.waitFor(hasContentDescription("Turns off in"))
+
+        // The pill switches BedJets, and each keeps its own state.
+        compose.onNode(second).performClick()
+        compose.waitFor(hasText("BEDJET-DEMO"))
+        compose.capture("bedjet-switcher")
+        compose.onNodeWithText("BEDJET-DEMO").performClick()
+        compose.waitFor(first)
+        compose.waitUntilGone(hasContentDescription("Turns off in"))
+
+        compose.onNode(first).performClick()
+        compose.waitFor(hasText("BEDJET-DEMO-2"))
+        compose.onNodeWithText("BEDJET-DEMO-2").performClick()
+        compose.waitFor(second)
+        compose.waitFor(hasContentDescription("Turns off in"))
+        compose.onNodeWithText("Off").performClick()
     }
 
     @Test
@@ -177,21 +211,21 @@ class LullUiTest {
         compose.onNodeWithText("Heat").performClick()
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         compose.waitFor(hasContentDescription("Turns off in"))
-        compose.waitForSlider("Turns off in", "4 hr")
+        compose.waitForSlider("Turns off in", "4 hours")
 
         // A shorter time picked by hand sticks, and survives a fan change.
         compose.slider("Turns off in").setTo(0f)
         Thread.sleep(3000)
-        assertEquals("5 min", compose.slider("Turns off in").value())
+        assertEquals("5 minutes", compose.slider("Turns off in").value())
         compose.slider("Fan").setTo(0.8f)
         Thread.sleep(3000)
-        assertEquals("5 min", compose.slider("Turns off in").value())
+        assertEquals("5 minutes", compose.slider("Turns off in").value())
 
         // Switching mode starts over at that mode's longest run.
         compose.onNodeWithText("Cool").performClick()
-        compose.waitForSlider("Turns off in", "12 hr")
+        compose.waitForSlider("Turns off in", "12 hours")
         compose.onNodeWithText("Heat").performClick()
-        compose.waitForSlider("Turns off in", "4 hr")
+        compose.waitForSlider("Turns off in", "4 hours")
         compose.capture("remote-heat")
         compose.onNodeWithText("Off").performClick()
 

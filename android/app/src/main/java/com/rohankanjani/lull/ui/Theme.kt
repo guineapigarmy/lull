@@ -47,14 +47,17 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,7 +71,8 @@ object Theme {
     val raised = Color(0.098f, 0.102f, 0.118f)
     val hairline = Color.White.copy(alpha = 0.08f)
     val secondary = Color.White.copy(alpha = 0.55f)
-    val tertiary = Color.White.copy(alpha = 0.32f)
+    /** The faintest text that still reads at 4.5:1 against the background and surfaces. */
+    val tertiary = Color.White.copy(alpha = 0.48f)
 
     val cool = Color(0.30f, 0.64f, 1.0f)
     val deepCool = Color(0.17f, 0.36f, 1.0f)
@@ -124,16 +128,24 @@ fun LullTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Theme.colors, content = content)
 }
 
+/**
+ * Whether the person has picked one of the largest text sizes, where layouts stack instead of squeezing.
+ * Like iOS's accessibility text sizes, which begin around one and a half times the default.
+ */
+@Composable
+fun isLargeText(): Boolean = LocalDensity.current.fontScale >= 1.5f
+
 /** Small all-caps label used above groups of content. */
 @Composable
-fun Eyebrow(text: String, modifier: Modifier = Modifier) {
+fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Theme.secondary) {
     Text(
         text.uppercase(),
-        modifier = modifier,
+        // Read as written rather than in capitals, which TalkBack can spell out letter by letter.
+        modifier = modifier.semantics { contentDescription = text },
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 1.6.sp,
-        color = Theme.secondary,
+        color = color,
     )
 }
 
@@ -219,15 +231,18 @@ fun LabeledSlider(
     step: Float = 1f,
     tint: Color = Color.White,
     enabled: Boolean = true,
+    /** What TalkBack reads for the value, when the shown text abbreviates it. */
+    spokenValue: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val steps = (((range.endInclusive - range.start) / step).roundToInt() - 1).coerceAtLeast(0)
-    Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary)
-            Spacer(Modifier.weight(1f))
-            Text(valueText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, style = Theme.tabular)
-        }
+    // One TalkBack element for the title, value and track together, so touching any of them
+    // finds the slider, and swiping up or down adjusts it.
+    Column(
+        Modifier.alpha(if (enabled) 1f else 0.4f).semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        ValueHeader(title, valueText, Modifier.clearAndSetSemantics {})
         Slider(
             value = value.coerceIn(range),
             onValueChange = { new ->
@@ -257,43 +272,80 @@ fun LabeledSlider(
             },
             modifier = Modifier.semantics {
                 contentDescription = title
-                stateDescription = valueText
+                stateDescription = spokenValue ?: valueText
             },
         )
     }
 }
 
-/** Mode buttons, three to a row. */
+/** A setting's name with its value at the end of the line, stacked instead when large text won't fit on one. */
 @Composable
-fun ModePicker(modes: List<Mode>, selection: Mode?, onSelect: (Mode) -> Unit) {
+fun ValueHeader(title: String, value: String, modifier: Modifier = Modifier) {
+    val name = @Composable { Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary) }
+    val reading = @Composable { Text(value, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, style = Theme.tabular) }
+    if (isLargeText()) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            name()
+            reading()
+        }
+    } else {
+        Row(modifier, verticalAlignment = Alignment.Bottom) {
+            name()
+            Spacer(Modifier.weight(1f))
+            reading()
+        }
+    }
+}
+
+/**
+ * Mode buttons, three to a row. Large text gets a column of full-width buttons with the icon beside the name.
+ * [hint] says what choosing a mode other than the selected one also does.
+ */
+@Composable
+fun ModePicker(modes: List<Mode>, selection: Mode?, hint: String? = null, onSelect: (Mode) -> Unit) {
     val haptics = LocalHapticFeedback.current
+    val large = isLargeText()
+    val perRow = if (large) 1 else 3
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        modes.chunked(3).forEach { row ->
+        modes.chunked(perRow).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 row.forEach { mode ->
                     val isSelected = mode == selection
                     val shape = RoundedCornerShape(18.dp)
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .heightIn(min = 62.dp)
-                            .clip(shape)
-                            .background(if (isSelected) mode.tint else Theme.raised)
-                            .clickable(role = Role.Button) {
-                                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                onSelect(mode)
-                            }
-                            .semantics(mergeDescendants = true) { selected = isSelected }
-                            .padding(vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
-                    ) {
-                        val color = if (isSelected) Color.Black else mode.tint
-                        Icon(mode.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        Text(mode.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = color)
+                    val color = if (isSelected) Color.Black else mode.tint
+                    val button = Modifier
+                        .weight(1f)
+                        .heightIn(min = 62.dp)
+                        .clip(shape)
+                        .background(if (isSelected) mode.tint else Theme.raised)
+                        .clickable(role = Role.Button, onClickLabel = if (isSelected) null else hint) {
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            onSelect(mode)
+                        }
+                        .semantics(mergeDescendants = true) { selected = isSelected }
+                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                    if (large) {
+                        Row(
+                            button.padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(mode.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+                            Text(mode.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = color)
+                        }
+                    } else {
+                        Column(
+                            button,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
+                        ) {
+                            Icon(mode.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+                            // The name wraps rather than truncating.
+                            Text(mode.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = color, textAlign = TextAlign.Center)
+                        }
                     }
                 }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                repeat(perRow - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

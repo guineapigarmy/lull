@@ -33,7 +33,7 @@ class StoreScreenshots {
             compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
             Thread.sleep(2000)
             compose.onNodeWithText("Heat").performClick()
-            compose.waitForSlider("Turns off in", "4 hr")
+            compose.waitForSlider("Turns off in", "4 hours")
             Thread.sleep(6000)
             compose.capture("01-remote", "store")
 
@@ -41,11 +41,11 @@ class StoreScreenshots {
             compose.waitFor(hasContentDescription("Start Night"))
             compose.capture("02-schedule", "store")
 
-            compose.onNodeWithContentDescription("Warm Welcome").performScrollTo().performClick()
+            compose.onNode(hasContentDescription("Warm Welcome,", substring = true)).performScrollTo().performClick()
             compose.waitFor(hasText("Add Phase"))
             compose.capture("03-editor", "store")
 
-            compose.onNode(hasContentDescription("Heat,", substring = true) and hasContentDescription("30 min", substring = true)).performClick()
+            compose.onNode(hasContentDescription("Heat,", substring = true) and hasContentDescription("30 minutes", substring = true)).performClick()
             compose.waitFor(hasText("Remove Phase"))
             Thread.sleep(800)
             compose.capture("04-phase", "store")

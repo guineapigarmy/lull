@@ -36,7 +36,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Simulated BedJet | `BedJetKit/.../DemoLink.swift` | `android/bedjetkit/.../DemoLink.kt` |
 | Bluetooth transport | `BedJetKit/.../BLELink.swift` | `android/app/src/main/java/com/rohankanjani/lull/BleLink.kt` |
 | Hand-over UUID | `BLELink.handoffUUID` | `android/bedjetkit/.../Handoff.kt` |
-| App state and actions | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` |
+| App state: the BedJets, schedules, settings | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` |
+| One BedJet: connection, night, history | `Lull/BedJet.swift` | `android/app/.../BedJet.kt` |
 | Schedules, phases, templates, formatting | `Lull/Schedule.swift` | `android/app/.../Schedule.kt` |
 | Night history, grouping and sample nights | `Lull/History.swift` | `android/app/.../History.kt` |
 | Colours and shared controls | `Lull/Theme.swift` | `android/app/.../ui/Theme.kt` |
@@ -50,6 +51,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
+| Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
+| Screen reader and text size tests | `LullTests/VoiceOverTests.swift`, `LullUITests/AccessibilityTests.swift` | `android/app/src/androidTest/.../AccessibilityTest.kt` (with the semantics checks in `LullUiTest.kt`) |
 | UI tests | `LullUITests/LullUITests.swift` | `android/app/src/androidTest/.../LullUiTest.kt` |
 | Store screenshots | `LullUITests/StoreScreenshots.swift` | `android/app/src/androidTest/.../StoreScreenshots.kt` |
 | Store listing | `fastlane/metadata/en-US/` | `fastlane/metadata/android/en-US/` |
@@ -58,6 +61,14 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory` and
 `-logConnections` on iOS are the `ephemeral`, `demoElapsedMinutes`, `demoLabelConnected`, `demoHistory` and
 `logConnections` intent extras on Android.
+
+## Accessibility, on both
+
+What VoiceOver reads on iOS, TalkBack reads on Android, in the same words: give each control the same spoken
+label, value (`stateDescription`), hint (`onClickLabel`) and actions (`customActions`) as its `accessibilityLabel`,
+`accessibilityValue`, `accessibilityHint` and `accessibilityAction`, and mark the same headings. Layouts that
+stack at iOS's accessibility text sizes stack on Android when `isLargeText()` is true (font scale 1.5 and up).
+Android text in `sp` grows with the person's setting already; iOS uses `scaledFont` for the same.
 
 ## Checking a change
 
@@ -85,6 +96,10 @@ Platform conventions, not behaviour:
 - Android asks for the "Nearby devices" permission when Lull first needs Bluetooth; iOS asks for Bluetooth.
 - Google Play skips a release whose version is already on the production track, but unlike the App
   Store lane it doesn't replace a release that is still in review.
+- iOS plays the night timeline as a VoiceOver audio graph (`accessibilityChartDescriptor`). Android has no
+  equivalent, so TalkBack reads the same phases from the timeline's description instead.
+- An iPhone advertises one set of services at a time, so iOS sends every BedJet's hand-over request in one
+  advertisement (`HandoffRequests`). Android runs one advertisement per BedJet side by side.
 
 ## Style
 

@@ -48,6 +48,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +69,7 @@ import java.util.Locale
 fun HistoryScreen(model: AppModel) {
     val expanded = remember { mutableStateListOf<String>() }
     Screen(model, "History") {
-        val nights = model.nights
+        val nights = model.bedJet.nights
         if (nights.isEmpty()) {
             Card {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -104,15 +105,17 @@ private fun NightRow(model: AppModel, night: Night, isExpanded: Boolean, toggle:
         DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEMMMd")),
     )
     // The schedule that ran, or else when the first and last changes happened.
-    val summary = night.scheduleNames.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: run {
+    fun summary(through: String): String = night.scheduleNames.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: run {
         val first = night.entries.firstOrNull()?.date
         val last = night.entries.lastOrNull()?.date
         if (first == null || last == null) "" else {
             val start = time(first)
             val end = time(last)
-            if (start == end) start else "$start – $end"
+            if (start == end) start else "$start $through $end"
         }
     }
+    // At the largest text sizes the curve moves under the text so the date and schedule keep the width.
+    val large = isLargeText()
     val turn by animateFloatAsState(if (isExpanded) 180f else 0f, tween(350), label = "chevron")
     Card(padding = 18.dp) {
         Column {
@@ -122,22 +125,20 @@ private fun NightRow(model: AppModel, night: Night, isExpanded: Boolean, toggle:
                     .clickable(onClick = toggle)
                     .testTag("Night")
                     .clearAndSetSemantics {
-                        contentDescription = "$title, $summary"
+                        contentDescription = "$title, ${summary(through = "to")}"
                         stateDescription = if (isExpanded) "Expanded" else "Collapsed"
                         role = Role.Button
-                        onClick { toggle(); true }
+                        onClick(label = if (isExpanded) "Hide this night" else "Show everything that happened this night") { toggle(); true }
                     },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(title, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        summary, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary,
-                        style = Theme.tabular, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                    Text(title, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                    Text(summary(through = "–"), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, style = Theme.tabular)
+                    if (large) NightCurve(night.phases, Modifier.fillMaxWidth().height(40.dp).padding(top = 6.dp), lineWidth = 2.dp)
                 }
-                NightCurve(night.phases, Modifier.size(width = 88.dp, height = 40.dp), lineWidth = 2.dp)
+                if (!large) NightCurve(night.phases, Modifier.size(width = 88.dp, height = 40.dp), lineWidth = 2.dp)
                 Icon(Icons.Filled.KeyboardArrowDown, null, tint = Theme.tertiary, modifier = Modifier.size(20.dp).rotate(turn))
             }
             AnimatedVisibility(
@@ -158,10 +159,16 @@ private fun NightRow(model: AppModel, night: Night, isExpanded: Boolean, toggle:
 @Composable
 private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
     val event = entry.event
-    val title = when (event) {
-        is HistoryEntry.Event.Air ->
-            if (model.adjustsTemperature(event.mode)) "${event.mode.title} · ${model.degrees(event.temperature)} · fan ${event.fanPercent}%"
-            else "${event.mode.title} · fan ${event.fanPercent}%"
+    // Parts are joined with a dot on screen; TalkBack gets commas and durations in words.
+    fun title(spoken: Boolean): String = when (event) {
+        is HistoryEntry.Event.Air -> {
+            val parts = if (model.bedJet.adjustsTemperature(event.mode)) {
+                listOf(event.mode.title, model.degrees(event.temperature), "fan ${event.fanPercent}%")
+            } else {
+                listOf(event.mode.title, "fan ${event.fanPercent}%")
+            }
+            parts.joinToString(if (spoken) ", " else " · ")
+        }
         is HistoryEntry.Event.Off -> "Turned off"
         is HistoryEntry.Event.ScheduleStarted -> "Started ${event.name ?: "a schedule"}"
         is HistoryEntry.Event.ScheduleEnded -> {
@@ -169,15 +176,20 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
             when (val ending = event.ending) {
                 HistoryEntry.Ending.ByYou -> "Ended $name"
                 HistoryEntry.Ending.Finished -> "$name finished"
-                is HistoryEntry.Ending.Early -> "$name stopped ${Format.duration(ending.minutes)} early"
+                is HistoryEntry.Ending.Early ->
+                    "$name stopped ${if (spoken) Format.spokenDuration(ending.minutes) else Format.duration(ending.minutes)} early"
             }
         }
     }
-    val detail = buildList {
+    fun detail(spoken: Boolean): String? = buildList {
         if (event is HistoryEntry.Event.Off && event.timerRanOut) add("Timer ran out")
         entry.room?.let { add("Room ${model.degrees(it)}") }
         if (entry.noticedLater) add("Seen when Lull reopened")
-    }.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+    }.takeIf { it.isNotEmpty() }?.joinToString(if (spoken) ", " else " · ")
+    val detail = detail(spoken = false)
+    // At the largest text sizes the time sits above what happened instead of in its own column.
+    val large = isLargeText()
+    val badge = 28.dp * LocalDensity.current.fontScale.coerceAtMost(1.6f)
     val icon: ImageVector = when {
         event is HistoryEntry.Event.Air -> event.mode.icon
         event is HistoryEntry.Event.Off -> Icons.Filled.PowerSettingsNew
@@ -193,15 +205,22 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
     }
 
     Row(
-        Modifier.fillMaxWidth().height(IntrinsicSize.Min).semantics(mergeDescendants = true) {},
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clearAndSetSemantics {
+                contentDescription = listOfNotNull(time(entry.date), title(spoken = true), detail(spoken = true)).joinToString(", ")
+            },
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            time(entry.date), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, style = Theme.tabular,
-            textAlign = TextAlign.End, modifier = Modifier.width(64.dp).padding(top = 6.dp),
-        )
+        if (!large) {
+            Text(
+                time(entry.date), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, style = Theme.tabular,
+                textAlign = TextAlign.End, modifier = Modifier.width(64.dp * LocalDensity.current.fontScale.coerceAtMost(1.6f)).padding(top = 6.dp),
+            )
+        }
         Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(28.dp).background(tint.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(badge).background(tint.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
                 Icon(icon, null, tint = tint, modifier = Modifier.size(14.dp))
             }
             // Joins the entries into one line through the night.
@@ -211,7 +230,8 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
             Modifier.weight(1f).padding(top = 4.dp, bottom = if (isLast) 0.dp else 14.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            if (large) Text(time(entry.date), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, style = Theme.tabular)
+            Text(title(spoken = false), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             if (detail != null) Text(detail, fontSize = 13.sp, color = Theme.secondary)
         }
         Spacer(Modifier.width(0.dp))

@@ -38,7 +38,14 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,7 +63,8 @@ import kotlinx.coroutines.launch
 /** Direct control, for when you want air right now rather than a schedule. */
 @Composable
 fun RemoteScreen(model: AppModel) {
-    val status = model.status
+    val bedJet = model.bedJet
+    val status = bedJet.status
     val mode = status?.mode ?: Mode.STANDBY
     var temperature by remember { mutableIntStateOf(60) }
     var fan by remember { mutableFloatStateOf(40f) }
@@ -83,29 +91,39 @@ fun RemoteScreen(model: AppModel) {
     LaunchedEffect(status) {
         // Follow the unit, which can also be changed from its own remote, but never
         // while a slider is being moved or its new value is still on the way there.
-        if (status == null || model.isBusy || System.currentTimeMillis() <= followAfter) return@LaunchedEffect
+        if (status == null || bedJet.isBusy || System.currentTimeMillis() <= followAfter) return@LaunchedEffect
         temperature = status.targetTemperature
         fan = status.fanPercent.toFloat()
         val limit = runtimeLimit(status)
         runtime = minutesLeft(status).toFloat().coerceIn(limit.range)
     }
 
+    LaunchedEffect(bedJet.id) {
+        // Another BedJet's settings show straight away.
+        followAfter = 0
+        chosenMode = null
+    }
+
     Screen(model, "Remote") {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { ClimateOrb(model, status) }
 
-        if (model.linkState == LinkState.YIELDED) {
+        if (bedJet.linkState == LinkState.YIELDED) {
             Text(
                 "In use on another phone. Touch a control to take over.",
                 fontSize = 13.sp, color = Theme.secondary, modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         }
 
-        Box(Modifier.alpha(if (model.canControl) 1f else 0.4f)) {
-            ModePicker(model.remoteModes + Mode.STANDBY, chosenMode ?: status?.mode) { picked ->
-                if (!model.canControl) return@ModePicker
+        // Only the controls: the BedJet button stays usable, so Demo mode is reachable with Bluetooth off.
+        Box(Modifier.alpha(if (bedJet.canControl) 1f else 0.4f)) {
+            ModePicker(
+                bedJet.remoteModes + Mode.STANDBY, chosenMode ?: status?.mode,
+                hint = if (bedJet.run != null) "End the schedule that's running" else null,
+            ) { picked ->
+                if (!bedJet.canControl) return@ModePicker
                 chosenMode = picked
                 model.scope.launch {
-                    model.setMode(picked)
+                    bedJet.setMode(picked)
                     chosenMode = null
                 }
             }
@@ -119,47 +137,50 @@ fun RemoteScreen(model: AppModel) {
             val shown = status ?: return@AnimatedVisibility
             Card(padding = 18.dp) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (model.adjustsTemperature(shown.mode)) {
+                    if (bedJet.adjustsTemperature(shown.mode)) {
                         TemperatureSlider(
                             model, shown.mode, temperature,
                             onChange = {
                                 temperature = it
-                                sending("temperature") { model.setTemperature(temperature) }
+                                sending("temperature") { bedJet.setTemperature(temperature) }
                             },
                             limits = if (shown.minTemperature < shown.maxTemperature) shown.minTemperature..shown.maxTemperature else null,
-                            enabled = model.canControl,
+                            enabled = bedJet.canControl,
                         )
                     }
                     LabeledSlider(
                         "Fan", "${fan.toInt()}%", fan,
                         onValueChange = {
                             fan = it
-                            sending("fan") { model.setFan(fan.toInt()) }
+                            sending("fan") { bedJet.setFan(fan.toInt()) }
                         },
-                        range = 5f..100f, step = 5f, tint = shown.mode.tint, enabled = model.canControl,
+                        range = 5f..100f, step = 5f, tint = shown.mode.tint, enabled = bedJet.canControl,
                     )
-                    if (model.run == null) {
+                    if (bedJet.run == null) {
                         val limit = runtimeLimit(shown)
                         LabeledSlider(
                             "Turns off in", Format.duration(runtime.toInt()), runtime,
                             onValueChange = {
                                 runtime = it
-                                sending("runtime") { model.setRuntime(runtime.toInt()) }
+                                sending("runtime") { bedJet.setRuntime(runtime.toInt()) }
                             },
-                            range = limit.range, step = limit.step, enabled = model.canControl,
+                            range = limit.range, step = limit.step, enabled = bedJet.canControl,
+                            spokenValue = Format.spokenDuration(runtime.toInt()),
                         )
                     } else {
                         // A schedule sets its own timing, so this is read-only until it ends.
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text("Phase ends in", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary)
-                            Spacer(Modifier.weight(1f))
-                            Text(Format.duration(minutesLeft(shown)), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, style = Theme.tabular)
-                        }
+                        ValueHeader(
+                            "Phase ends in", Format.duration(minutesLeft(shown)),
+                            Modifier.clearAndSetSemantics {
+                                contentDescription = "Phase ends in"
+                                stateDescription = Format.spokenDuration(minutesLeft(shown))
+                            },
+                        )
                     }
                 }
             }
         }
-        if (model.run != null) {
+        if (bedJet.run != null) {
             Text(
                 "Choosing a mode here ends the schedule that's running.",
                 fontSize = 13.sp, color = Theme.tertiary, modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -208,11 +229,24 @@ fun TemperatureSlider(
 /** The glowing live readout: what the BedJet is doing this second. */
 @Composable
 fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
+    val bedJet = model.bedJet
     val mode = status?.mode ?: Mode.STANDBY
     val isOn = status?.isRunning ?: false
     val tint by animateColorAsState(mode.tint, tween(600), label = "tint")
     val ring by animateDpAsState(if (isOn) 2.5.dp else 1.dp, tween(600), label = "ring")
-    Box(Modifier.size(204.dp).semantics(mergeDescendants = true) {}, contentAlignment = Alignment.Center) {
+    // Grows with the text inside it, up to what fits across a phone.
+    val diameter = (204.dp * LocalDensity.current.fontScale).coerceAtMost(320.dp)
+    val spoken = when {
+        status == null -> "Looking for your BedJet"
+        !status.isRunning -> "Off, room ${model.degrees(status.ambientTemperature)}"
+        else -> buildList {
+            add(status.mode.activity)
+            if (bedJet.adjustsTemperature(status.mode)) add("set to ${model.degrees(status.targetTemperature)}")
+            add("fan ${status.fanPercent}%")
+            add("air ${model.degrees(status.actualTemperature)}")
+        }.joinToString(", ")
+    }
+    Box(Modifier.size(diameter).clearAndSetSemantics { contentDescription = spoken }, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize().blur(24.dp, BlurredEdgeTreatment.Unbounded)) {
             drawCircle(
                 Brush.radialGradient(
@@ -229,22 +263,31 @@ fun ClimateOrb(model: AppModel, status: DeviceStatus?) {
                 style = Stroke(width),
             )
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            Modifier.padding(horizontal = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             if (status != null) {
-                Eyebrow(mode.activity)
-                Text(
-                    if (isOn && model.adjustsTemperature(mode)) model.degrees(status.targetTemperature) else if (isOn) "${status.fanPercent}%" else "Off",
-                    fontSize = 60.sp, fontWeight = FontWeight.Thin, style = Theme.tabular,
+                // White, unlike other labels, so it stays readable over the glow.
+                Eyebrow(mode.activity, color = Color.White)
+                BasicText(
+                    if (isOn && bedJet.adjustsTemperature(mode)) model.degrees(status.targetTemperature) else if (isOn) "${status.fanPercent}%" else "Off",
+                    style = Theme.tabular.copy(fontSize = 60.sp, fontWeight = FontWeight.Light, color = Color.White, textAlign = TextAlign.Center),
+                    maxLines = 1,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 30.sp, maxFontSize = 60.sp * LocalDensity.current.fontScale),
                 )
                 Text(
                     if (isOn) "Fan ${status.fanPercent}% · Air ${model.degrees(status.actualTemperature)}"
                     else "Room ${model.degrees(status.ambientTemperature)}",
-                    fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, style = Theme.tabular,
+                    fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color.White, style = Theme.tabular,
+                    textAlign = TextAlign.Center,
                 )
             } else {
                 CircularProgressIndicator(color = Theme.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                 Text(
-                    "Looking for your BedJet", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary,
+                    if (model.hasSeveralBedJets) "Looking for ${model.title(bedJet)}" else "Looking for your BedJet",
+                    fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }

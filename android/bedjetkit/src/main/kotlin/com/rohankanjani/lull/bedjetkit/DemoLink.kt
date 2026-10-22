@@ -12,6 +12,7 @@ import kotlin.math.sign
  * Used for the Android emulator (which has no BedJet nearby), Demo mode and tests.
  */
 class DemoLink(
+    val name: String = DEFAULT_NAME,
     slots: List<StoredProgram?> = listOf(null, null, null),
     /** Where the one-second clock runs. The app passes its main scope. */
     private val scope: CoroutineScope? = null,
@@ -36,6 +37,10 @@ class DemoLink(
         maxRuntimeMinutes = 0, minTemperature = 38, maxTemperature = 80, ambientTemperature = 45, lastShutdownReason = 0,
         extra = DeviceStatus.Extra(ledEnabled = true, beepsMuted = false, programStep = 0, notification = 0),
     )
+
+    companion object {
+        const val DEFAULT_NAME = "BEDJET-DEMO"
+    }
 
     private data class Run(val slot: Int, val step: Int, val stepEnds: Long)
 
@@ -82,7 +87,7 @@ class DemoLink(
     }
 
     override suspend fun query(request: Int): ByteArray = when (request) {
-        Codec.Query.DEVICE_NAME -> "BEDJET-DEMO".encodeToByteArray() + 0
+        Codec.Query.DEVICE_NAME -> name.encodeToByteArray() + 0
         Codec.Query.FIRMWARE -> "V1.20 (demo)".encodeToByteArray() + 0
         Codec.Query.PROGRAM_NAMES -> slots.fold(ByteArray(0)) { data, program ->
             val slot = ByteArray(16)

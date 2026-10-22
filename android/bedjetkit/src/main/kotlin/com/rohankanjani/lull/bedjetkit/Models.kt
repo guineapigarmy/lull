@@ -51,6 +51,7 @@ enum class Mode(val raw: Int) {
  * Which BedJet a link is talking to. Both run the same kind of program on the unit, but they speak
  * different protocols and the V2 has fewer modes.
  */
+@Serializable
 enum class Generation {
     V2,
     V3;

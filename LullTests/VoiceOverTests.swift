@@ -126,7 +126,10 @@ final class VoiceOverTests: XCTestCase {
         // The editor still shows above the sheet, but VoiceOver stays inside the sheet.
         XCTAssertTrue(isModal(screen), "VoiceOver can leave the phase sheet")
         XCTAssertTrue(try find("Phase").accessibilityTraits.contains(.header))
-        XCTAssertNotNil(element { $0.accessibilityTraits.contains(.selected) && $0.accessibilityTraits.contains(.button) })
+        // The phase's mode reads as selected once the sheet has settled.
+        try wait("the phase's mode to read as selected") {
+            self.element { $0.accessibilityTraits.contains(.selected) && $0.accessibilityTraits.contains(.button) }
+        }
         XCTAssertTrue(duration.accessibilityTraits.contains(.adjustable))
         // Swipe down a step, or up if it's already as short as it goes.
         let before = duration.accessibilityValue

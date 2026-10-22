@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ScheduleEditor: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     @Environment(\.dismiss) private var dismiss
     @State var schedule: Schedule
     @State private var selection: Phase.ID?
@@ -66,7 +67,7 @@ struct ScheduleEditor: View {
             .safeAreaInset(edge: .bottom) {
                 Button("Use Tonight") {
                     model.save(schedule)
-                    model.bedJet.tonightID = schedule.id
+                    bedJet.tonightID = schedule.id
                     dismiss()
                 }
                 .buttonStyle(PrimaryButtonStyle())
@@ -134,6 +135,7 @@ struct ScheduleEditor: View {
 
 private struct PhaseRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     let phase: Phase
     let number: Int
     let startsAt: Int
@@ -185,7 +187,7 @@ private struct PhaseRow: View {
 
     private var detail: String {
         var parts: [String] = []
-        if model.bedJet.adjustsTemperature(phase.mode) { parts.append(model.degrees(phase.temperature)) }
+        if bedJet.adjustsTemperature(phase.mode) { parts.append(model.degrees(phase.temperature)) }
         if phase.mode.usesFan { parts.append("Fan \(phase.fanPercent)%") }
         return parts.isEmpty ? "Air off" : parts.joined(separator: " · ")
     }
@@ -193,6 +195,7 @@ private struct PhaseRow: View {
 
 private struct PhaseEditor: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     @Environment(\.dismiss) private var dismiss
     @Binding var phase: Phase
     let canDelete: Bool
@@ -223,11 +226,11 @@ private struct PhaseEditor: View {
                 Spacer()
                 Button("Done") { dismiss() }.scaledFont(17, .semibold)
             }
-            ModePicker(modes: model.bedJet.phaseModes, selection: phase.mode) { mode in
+            ModePicker(modes: bedJet.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
                 if !mode.temperatureRange.contains(phase.temperature) { phase.temperature = mode.defaultTemperature }
             }
-            if model.bedJet.adjustsTemperature(phase.mode) {
+            if bedJet.adjustsTemperature(phase.mode) {
                 TemperatureSlider(mode: phase.mode, temperature: $phase.temperature)
             }
             if phase.mode.usesFan {
@@ -237,7 +240,7 @@ private struct PhaseEditor: View {
                           range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
             if isHeatLimited {
                 Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
-                     + (model.bedJet.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
+                     + (bedJet.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
                     .scaledFont(13)
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)

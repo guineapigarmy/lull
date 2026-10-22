@@ -126,7 +126,10 @@ final class VoiceOverTests: XCTestCase {
         // The editor still shows above the sheet, but VoiceOver stays inside the sheet.
         XCTAssertTrue(isModal(screen), "VoiceOver can leave the phase sheet")
         XCTAssertTrue(try find("Phase").accessibilityTraits.contains(.header))
-        XCTAssertNotNil(element { $0.accessibilityTraits.contains(.selected) && $0.accessibilityTraits.contains(.button) })
+        // The phase's mode reads as selected once the sheet has settled.
+        try wait("the phase's mode to read as selected") {
+            self.element { $0.accessibilityTraits.contains(.selected) && $0.accessibilityTraits.contains(.button) }
+        }
         XCTAssertTrue(duration.accessibilityTraits.contains(.adjustable))
         // Swipe down a step, or up if it's already as short as it goes.
         let before = duration.accessibilityValue
@@ -148,16 +151,21 @@ final class VoiceOverTests: XCTestCase {
         activate(try find(prefix: "BedJet, "))
         let ring = try wait("the BedJet sheet") { self.element("Light ring") }
         XCTAssertTrue(isModal(screen), "VoiceOver can leave the BedJet sheet")
-        // The BedJet's three slots, the one Lull uses said in words rather than “Lull · name”.
-        func slots() -> [NSObject] { elements().filter { $0.accessibilityLabel?.hasPrefix("Slot ") == true } }
-        try wait("the BedJet's slots to load") { slots().count == 3 ? ring : nil }
-        XCTAssertFalse(slots().contains { $0.accessibilityLabel?.contains("·") == true })
         // Double-tapping a switch flips it and VoiceOver reads the new state.
         let was = ring.accessibilityValue
         activate(ring)
         try wait("the light ring to switch") { self.element("Light ring").flatMap { $0.accessibilityValue != was ? $0 : nil } }
         activate(try find("Light ring"))
         try wait("the light ring to switch back") { self.element("Light ring").flatMap { $0.accessibilityValue == was ? $0 : nil } }
+        // The BedJet's three slots, the one Lull uses said in words rather than “Lull · name”. On a shorter
+        // screen they're further down than the list has made rows for yet.
+        func slots() -> [NSObject] { elements().filter { $0.accessibilityLabel?.hasPrefix("Slot ") == true } }
+        try wait("the BedJet's slots to load") {
+            if slots().count == 3 { return ring }
+            self.scrollOn()
+            return nil
+        }
+        XCTAssertFalse(slots().contains { $0.accessibilityLabel?.contains("·") == true })
         // The menu picker reads its choice as part of its label: “Temperature, Fahrenheit”.
         scrollToEnd()
         let units = try find(prefix: "Temperature")
@@ -250,6 +258,16 @@ final class VoiceOverTests: XCTestCase {
         guard let scroll = scrollView else { return }
         let bottom = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
         scroll.setContentOffset(CGPoint(x: 0, y: max(bottom, -scroll.adjustedContentInset.top)), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    }
+
+    /// Scrolls half a screen further, and back to the top after the end, so rows the list hasn't made yet appear.
+    private func scrollOn() {
+        guard let scroll = scrollView else { return }
+        let top = -scroll.adjustedContentInset.top
+        let bottom = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+        let next = scroll.contentOffset.y + scroll.bounds.height / 2
+        scroll.setContentOffset(CGPoint(x: 0, y: next > bottom + 1 ? top : min(next, max(bottom, top))), animated: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
     }
 

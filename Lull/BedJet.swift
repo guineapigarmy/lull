@@ -5,9 +5,12 @@ import Observation
 /// What is kept of a BedJet between launches.
 struct SavedBedJet: Codable {
     var id = UUID()
+    /// The Bluetooth identity of the unit this BedJet always connects to.
     var unit: UUID?
     var name: String?
-    var generation: Generation = .v3
+    var nickname: String?
+    /// Nil until the unit has said what it is.
+    var generation: Generation?
     var tonightID: Schedule.ID?
     var run: ActiveRun?
     var slot: Int?
@@ -19,15 +22,22 @@ struct SavedBedJet: Codable {
 final class BedJet: Identifiable {
     let id: UUID
     let isDemo: Bool
-    /// The Bluetooth identity of the unit, known once it has connected. A demo has none.
-    private(set) var unit: UUID?
+    /// The Bluetooth identity of the unit picked for this BedJet. Lull never connects it to another.
+    let unit: UUID?
     /// The name the BedJet gives itself, kept so it can be shown while the BedJet is away.
     private(set) var name: String?
+    /// A name given on this phone, such as "My side". The BedJet itself isn't renamed.
+    var nickname: String? { didSet { app?.save() } }
+    var displayName: String {
+        if let nickname = nickname?.trimmingCharacters(in: .whitespaces), !nickname.isEmpty { return nickname }
+        return name ?? "BedJet"
+    }
     private(set) var linkState: LinkState = .searching
     private(set) var status: DeviceStatus?
     private(set) var firmware: String?
-    /// The kind of BedJet, kept so schedules can be edited for it while it is away.
-    private(set) var generation: Generation
+    /// The kind of BedJet, kept so schedules can be edited for it while it is away. Nil until it has said.
+    private(set) var knownGeneration: Generation?
+    var generation: Generation { knownGeneration ?? .v3 }
     /// What is saved in the BedJet's three program slots.
     private(set) var deviceSlots: [StoredProgram?] = []
 
@@ -43,6 +53,8 @@ final class BedJet: Identifiable {
     /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
     private(set) var isSlowToFind = false
     private(set) var isBusy = false
+    /// A schedule is being written to the BedJet, which takes several steps.
+    private(set) var isSavingSchedule = false
     /// Set when every slot on the BedJet is taken and the user has to pick one to reuse.
     var needsSlotChoice = false
 
@@ -60,7 +72,7 @@ final class BedJet: Identifiable {
     private var lastCommandAt = Date.distantPast
 
     var saved: SavedBedJet {
-        SavedBedJet(id: id, unit: unit, name: name, generation: generation, tonightID: tonightID, run: run, slot: slot)
+        SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot)
     }
 
     var tonight: Schedule? {
@@ -83,7 +95,8 @@ final class BedJet: Identifiable {
         self.isDemo = isDemo
         unit = saved.unit
         name = saved.name
-        generation = saved.generation
+        nickname = saved.nickname
+        knownGeneration = saved.generation
         tonightID = saved.tonightID
         run = saved.run.flatMap { $0.endsAt > Date() ? $0 : nil }
         slot = saved.slot
@@ -103,20 +116,10 @@ final class BedJet: Identifiable {
         status = nil
         firmware = nil
         deviceSlots = []
-        let link: BedJetLink
-        if isDemo {
-            link = DemoLink(name: name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
-        } else {
-            let ble = BLELink(unit: unit)
-            ble.accepts = { [weak self] unit in
-                guard let self, let app = self.app else { return false }
-                return app.accepts(unit, for: self)
-            }
-            // Never hand the BedJet to another phone halfway through saving a schedule.
-            ble.canYield = { [weak self] in self?.isBusy != true }
-            link = ble
-        }
+        guard let app else { return }
+        let link = app.makeLink(for: self)
+        // Never hand the BedJet to another phone halfway through saving a schedule.
+        (link as? BLELink)?.canYield = { [weak self] in self?.isBusy != true }
         link.onStateChange = { [weak self] state in self?.linkStateChanged(state) }
         link.onStatus = { [weak self] status in self?.statusChanged(status) }
         self.link = link
@@ -144,19 +147,6 @@ final class BedJet: Identifiable {
         restartSearchTimer()
     }
 
-    /// Lets go of the unit, so the nearest BedJet takes its place.
-    func forgetUnit() {
-        (link as? BLELink)?.forget()
-        unit = nil
-        name = nil
-        slot = nil
-        lastRefresh = .distantPast
-        app?.save()
-    }
-
-    /// The unit being connected to or connected, so other BedJets leave it alone.
-    var unitInUse: UUID? { (link as? BLELink)?.unitInUse }
-
     private func restartSearchTimer() {
         searchTimer?.cancel()
         searchTimer = nil
@@ -167,7 +157,7 @@ final class BedJet: Identifiable {
     /// Counts how long Lull has been looking, across searching and connecting, but not while
     /// another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
     private func timeSearch() {
-        guard !isDemo, linkState == .searching || linkState == .connecting else {
+        guard linkState == .searching || linkState == .connecting else {
             searchTimer?.cancel()
             searchTimer = nil
             isSlowToFind = false
@@ -186,13 +176,7 @@ final class BedJet: Identifiable {
         timeSearch()
         guard state == .ready, let link else { return }
         connectedAt = Date()
-        generation = link.generation
-        if let found = (link as? BLELink)?.unit, found != unit {
-            // A replacement unit has its own slots and name.
-            if unit != nil { slot = nil }
-            unit = found
-            lastRefresh = .distantPast
-        }
+        knownGeneration = link.generation
         app?.save()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
@@ -253,7 +237,11 @@ final class BedJet: Identifiable {
 
     func startTonight() async {
         guard let schedule = tonight, let link else { return }
+        isSavingSchedule = true
+        defer { isSavingSchedule = false }
         await perform {
+            // Known for certain once connected, which `perform` waited for; checked before anything is written.
+            if let problem = self.problem(running: schedule) { throw BedJetError.invalidProgram(problem) }
             // A V2 holds just the one sequence, which Lull always replaces.
             let slot: Int
             if link.generation == .v2 {
@@ -522,30 +510,20 @@ final class BedJet: Identifiable {
     }
 
     /// Each BedJet keeps its own history, and demo BedJets are separate ones, so pretend nights never mix with real ones.
-    static func historyFile(for id: UUID) -> URL {
-        URL.applicationSupportDirectory.appending(path: "history-\(id.uuidString).json")
-    }
+    private var historyFile: URL? { app?.storage.historyFile(for: id) }
 
     private func loadHistory() {
-        let saved = AppModel.isEphemeral ? nil
-            : (try? Data(contentsOf: Self.historyFile(for: id))).flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
+        let saved = historyFile.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
         history = saved?.entries ?? (AppModel.seedsDemoHistory ? HistoryEntry.samples() : [])
         lastSeen = saved?.lastSeen
     }
 
     private func saveHistory() {
         app?.publishWidgets()
-        guard !AppModel.isEphemeral else { return }
+        guard let file = historyFile else { return }
         let saved = SavedHistory(entries: history, lastSeen: lastSeen)
-        let file = Self.historyFile(for: id)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
-    }
-
-    func deleteHistory() {
-        settling?.cancel()
-        settling = nil
-        try? FileManager.default.removeItem(at: Self.historyFile(for: id))
     }
 
     // MARK: Schedules
@@ -555,4 +533,20 @@ final class BedJet: Identifiable {
     var phaseModes: [Mode] { Mode.phaseModes.filter(generation.supports) }
 
     func adjustsTemperature(_ mode: Mode) -> Bool { generation.adjustsTemperature(mode) }
+
+    /// Modes in a schedule that this BedJet can't run. Schedules are shared between BedJets, so one made for a
+    /// BedJet 3 may not suit a V2; it is never changed to fit, only refused.
+    func unsupportedModes(in schedule: Schedule) -> [Mode] {
+        var modes: [Mode] = []
+        for phase in schedule.phases where !generation.supports(phase.mode) && !modes.contains(phase.mode) { modes.append(phase.mode) }
+        return modes
+    }
+
+    /// Why a schedule can't run on this BedJet, if it can't.
+    func problem(running schedule: Schedule) -> String? {
+        let modes = unsupportedModes(in: schedule)
+        guard !modes.isEmpty else { return nil }
+        let names = ListFormatter.localizedString(byJoining: modes.map(\.title))
+        return "\(displayName) is a BedJet V2, which can't run \(names). Edit “\(schedule.name)” or pick another schedule for it."
+    }
 }

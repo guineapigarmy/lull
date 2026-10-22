@@ -4,11 +4,12 @@ import SwiftUI
 /// What the BedJet did each night, so the morning after you can see what you picked at 3 a.m.
 struct HistoryView: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     @State private var expanded: Set<Night.ID> = []
 
     var body: some View {
         Screen(title: "History") {
-            let nights = model.bedJet.nights
+            let nights = bedJet.nights
             if nights.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
@@ -96,6 +97,7 @@ private struct NightRow: View {
 
 private struct EntryRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(BedJet.self) private var bedJet
     let entry: HistoryEntry
     let isLast: Bool
     @ScaledMetric(relativeTo: .footnote) private var badge: CGFloat = 28
@@ -148,7 +150,7 @@ private struct EntryRow: View {
     private func title(spoken: Bool) -> String {
         switch entry.event {
         case let .air(mode, temperature, fan):
-            let parts = model.bedJet.adjustsTemperature(mode) ? [mode.title, model.degrees(temperature), "fan \(fan)%"] : [mode.title, "fan \(fan)%"]
+            let parts = bedJet.adjustsTemperature(mode) ? [mode.title, model.degrees(temperature), "fan \(fan)%"] : [mode.title, "fan \(fan)%"]
             return parts.joined(separator: spoken ? ", " : " · ")
         case .off: return "Turned off"
         case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"

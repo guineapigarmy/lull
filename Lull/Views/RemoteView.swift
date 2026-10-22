@@ -14,22 +14,23 @@ struct RemoteView: View {
     @State private var chosenMode: Mode?
 
     var body: some View {
-        let status = model.status
+        let bedJet = model.bedJet
+        let status = bedJet.status
         let mode = status?.mode ?? .standby
         Screen(title: "Remote") {
             ClimateOrb(status: status).frame(maxWidth: .infinity)
 
-            if model.linkState == .yielded {
+            if bedJet.linkState == .yielded {
                 Text("In use on another phone. Touch a control to take over.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity)
             }
 
-            ModePicker(modes: model.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
+            ModePicker(modes: bedJet.remoteModes + [.standby], selection: chosenMode ?? status?.mode) { mode in
                 chosenMode = mode
                 Task {
-                    await model.setMode(mode)
+                    await bedJet.setMode(mode)
                     chosenMode = nil
                 }
             }
@@ -37,18 +38,18 @@ struct RemoteView: View {
             if let status, status.isRunning {
                 Card(padding: 18) {
                     VStack(spacing: 16) {
-                        if model.adjustsTemperature(mode) {
+                        if bedJet.adjustsTemperature(mode) {
                             TemperatureSlider(mode: mode, temperature: sending($temperature, "temperature") {
-                                await model.setTemperature(temperature)
+                                await bedJet.setTemperature(temperature)
                             }, limits: status.minTemperature < status.maxTemperature ? status.minTemperature...status.maxTemperature : nil)
                         }
                         LabeledSlider(title: "Fan", valueText: "\(Int(fan))%", value: sending($fan, "fan") {
-                            await model.setFan(percent: Int(fan))
+                            await bedJet.setFan(percent: Int(fan))
                         }, range: 5...100, step: 5, tint: mode.tint)
-                        if model.run == nil {
+                        if bedJet.run == nil {
                             let limit = runtimeLimit(status)
                             LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)), value: sending($runtime, "runtime") {
-                                await model.setRuntime(minutes: Int(runtime))
+                                await bedJet.setRuntime(minutes: Int(runtime))
                             }, range: limit.range, step: limit.step)
                         } else {
                             // A schedule sets its own timing, so this is read-only until it ends.
@@ -64,23 +65,28 @@ struct RemoteView: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            if model.run != nil {
+            if bedJet.run != nil {
                 Text("Choosing a mode here ends the schedule that's running.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity)
             }
         }
-        .disabled(!model.canControl)
+        .disabled(!bedJet.canControl)
         .animation(.smooth(duration: 0.3), value: status?.isRunning)
         .onChange(of: status, initial: true) { _, status in
             // Follow the unit, which can also be changed from its own remote, but never
             // while a slider is being moved or its new value is still on the way there.
-            guard let status, !model.isBusy, Date() > followAfter else { return }
+            guard let status, !bedJet.isBusy, Date() > followAfter else { return }
             temperature = status.targetTemperature
             fan = Double(status.fanPercent)
             let limit = runtimeLimit(status)
             runtime = min(max(Double(minutesLeft(status)), limit.range.lowerBound), limit.range.upperBound)
+        }
+        .onChange(of: bedJet.id) {
+            // Another BedJet's settings show straight away.
+            followAfter = .distantPast
+            chosenMode = nil
         }
     }
 
@@ -134,7 +140,7 @@ struct ClimateOrb: View {
             VStack(spacing: 4) {
                 if let status {
                     Eyebrow(mode.activity)
-                    Text(isOn && model.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
+                    Text(isOn && model.bedJet.adjustsTemperature(mode) ? model.degrees(status.targetTemperature) : isOn ? "\(status.fanPercent)%" : "Off")
                         .font(.system(size: 60, weight: .thin))
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -145,7 +151,7 @@ struct ClimateOrb: View {
                         .monospacedDigit()
                 } else {
                     ProgressView()
-                    Text("Looking for your BedJet")
+                    Text(model.hasSeveralBedJets ? "Looking for \(model.title(of: model.bedJet))" : "Looking for your BedJet")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Theme.secondary)
                         .padding(.top, 8)

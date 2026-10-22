@@ -8,7 +8,7 @@ struct HistoryView: View {
 
     var body: some View {
         Screen(title: "History") {
-            let nights = model.nights
+            let nights = model.bedJet.nights
             if nights.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
@@ -128,7 +128,7 @@ private struct EntryRow: View {
     private var title: String {
         switch entry.event {
         case let .air(mode, temperature, fan):
-            return model.adjustsTemperature(mode) ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
+            return model.bedJet.adjustsTemperature(mode) ? "\(mode.title) · \(model.degrees(temperature)) · fan \(fan)%" : "\(mode.title) · fan \(fan)%"
         case .off: return "Turned off"
         case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"
         case let .scheduleEnded(name, ending):

@@ -1,0 +1,557 @@
+import BedJetKit
+import Foundation
+import Observation
+
+/// What is kept of a BedJet between launches.
+struct SavedBedJet: Codable {
+    var id = UUID()
+    var unit: UUID?
+    var name: String?
+    var generation: Generation = .v3
+    var tonightID: Schedule.ID?
+    var run: ActiveRun?
+    var slot: Int?
+}
+
+/// One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did.
+@MainActor
+@Observable
+final class BedJet: Identifiable {
+    let id: UUID
+    let isDemo: Bool
+    /// The Bluetooth identity of the unit, known once it has connected. A demo has none.
+    private(set) var unit: UUID?
+    /// The name the BedJet gives itself, kept so it can be shown while the BedJet is away.
+    private(set) var name: String?
+    private(set) var linkState: LinkState = .searching
+    private(set) var status: DeviceStatus?
+    private(set) var firmware: String?
+    /// The kind of BedJet, kept so schedules can be edited for it while it is away.
+    private(set) var generation: Generation
+    /// What is saved in the BedJet's three program slots.
+    private(set) var deviceSlots: [StoredProgram?] = []
+
+    var tonightID: Schedule.ID? { didSet { app?.save() } }
+    private(set) var run: ActiveRun? { didSet { app?.save() } }
+    /// The BedJet slot this app keeps tonight's schedule in.
+    private(set) var slot: Int? { didSet { app?.save() } }
+
+    /// What the BedJet did, oldest first, so the morning after can be checked against how the night felt.
+    private(set) var history: [HistoryEntry] = []
+    var nights: [Night] { Night.group(history) }
+
+    /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
+    private(set) var isSlowToFind = false
+    private(set) var isBusy = false
+    /// Set when every slot on the BedJet is taken and the user has to pick one to reuse.
+    var needsSlotChoice = false
+
+    @ObservationIgnored private weak var app: AppModel?
+    private var link: BedJetLink?
+    private var lastRefresh = Date.distantPast
+    private var keepsLongestRuntime = true
+    private var searchTimer: Task<Void, Never>?
+    /// What the history last recorded the BedJet doing, kept across launches to notice what changed while Lull was closed.
+    private var lastSeen: Seen?
+    /// The latest report, waiting to settle before it is compared with `lastSeen`.
+    private var observed: Seen?
+    private var settling: Task<Void, Never>?
+    private var connectedAt = Date.distantPast
+    private var lastCommandAt = Date.distantPast
+
+    var saved: SavedBedJet {
+        SavedBedJet(id: id, unit: unit, name: name, generation: generation, tonightID: tonightID, run: run, slot: slot)
+    }
+
+    var tonight: Schedule? {
+        guard let schedules = app?.schedules else { return nil }
+        return schedules.first { $0.id == tonightID } ?? schedules.first
+    }
+
+    var isConnected: Bool { linkState == .ready }
+    /// Controls stay live while connecting or while another phone has the BedJet: what is tapped
+    /// is sent the moment the connection is up.
+    var canControl: Bool { linkState != .bluetoothOff && linkState != .unauthorized }
+    /// A schedule is running on the BedJet that this phone didn't start, for example from a partner's phone.
+    var runningElsewhereStep: Int? {
+        guard run == nil, let step = status?.extra?.programStep, step > 0 else { return nil }
+        return step
+    }
+
+    init(_ saved: SavedBedJet, isDemo: Bool, app: AppModel) {
+        id = saved.id
+        self.isDemo = isDemo
+        unit = saved.unit
+        name = saved.name
+        generation = saved.generation
+        tonightID = saved.tonightID
+        run = saved.run.flatMap { $0.endsAt > Date() ? $0 : nil }
+        slot = saved.slot
+        self.app = app
+        loadHistory()
+        if let ended = saved.run, run == nil {
+            record(.scheduleEnded(name: ended.schedule.name, ending: .finished), at: ended.endsAt)
+        }
+    }
+
+    // MARK: Connection
+
+    /// Starts talking to the BedJet. Only the one on screen asks another phone to hand it over;
+    /// the rest connect whenever they are free.
+    func connect(asking: Bool) {
+        link?.stop()
+        status = nil
+        firmware = nil
+        deviceSlots = []
+        let link: BedJetLink
+        if isDemo {
+            link = DemoLink(name: name ?? DemoLink.defaultName,
+                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
+        } else {
+            let ble = BLELink(unit: unit)
+            ble.accepts = { [weak self] unit in
+                guard let self, let app = self.app else { return false }
+                return app.accepts(unit, for: self)
+            }
+            // Never hand the BedJet to another phone halfway through saving a schedule.
+            ble.canYield = { [weak self] in self?.isBusy != true }
+            link = ble
+        }
+        link.onStateChange = { [weak self] state in self?.linkStateChanged(state) }
+        link.onStatus = { [weak self] status in self?.statusChanged(status) }
+        self.link = link
+        linkState = link.state
+        lastRefresh = .distantPast
+        resume(asking: asking)
+    }
+
+    /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
+    /// Holding on to it would make coming back instant, but a phone that is off screen cannot be
+    /// relied on to hear another phone asking for the BedJet.
+    func pause() {
+        link?.stop()
+        // A change still settling would otherwise wait until Lull is opened again.
+        if settling != nil { commitObserved() }
+        saveHistory()
+    }
+
+    func resume(asking: Bool) {
+        if !asking, let ble = link as? BLELink {
+            ble.listen()
+        } else {
+            link?.start()
+        }
+        restartSearchTimer()
+    }
+
+    /// Lets go of the unit, so the nearest BedJet takes its place.
+    func forgetUnit() {
+        (link as? BLELink)?.forget()
+        unit = nil
+        name = nil
+        slot = nil
+        lastRefresh = .distantPast
+        app?.save()
+    }
+
+    /// The unit being connected to or connected, so other BedJets leave it alone.
+    var unitInUse: UUID? { (link as? BLELink)?.unitInUse }
+
+    private func restartSearchTimer() {
+        searchTimer?.cancel()
+        searchTimer = nil
+        isSlowToFind = false
+        timeSearch()
+    }
+
+    /// Counts how long Lull has been looking, across searching and connecting, but not while
+    /// another phone has the BedJet or Bluetooth is unavailable, which already say what is wrong.
+    private func timeSearch() {
+        guard !isDemo, linkState == .searching || linkState == .connecting else {
+            searchTimer?.cancel()
+            searchTimer = nil
+            isSlowToFind = false
+            return
+        }
+        guard searchTimer == nil else { return }
+        searchTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.isSlowToFind = true
+        }
+    }
+
+    private func linkStateChanged(_ state: LinkState) {
+        linkState = state
+        timeSearch()
+        guard state == .ready, let link else { return }
+        connectedAt = Date()
+        generation = link.generation
+        if let found = (link as? BLELink)?.unit, found != unit {
+            // A replacement unit has its own slots and name.
+            if unit != nil { slot = nil }
+            unit = found
+            lastRefresh = .distantPast
+        }
+        app?.save()
+        logConnection()
+        // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
+        // only needs re-reading now and then.
+        guard Date().timeIntervalSince(lastRefresh) > 300 else { return }
+        Task {
+            // Anything the person tapped while connecting goes first.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            while isBusy { try? await Task.sleep(nanoseconds: 200_000_000) }
+            guard link.state == .ready else { return }
+            do {
+                try await link.syncClock()
+                name = try await link.deviceName()
+                app?.save()
+                firmware = try await link.firmwareVersion()
+                try await refreshSlots()
+                lastRefresh = Date()
+            } catch {
+                // Status keeps streaming without these; they are retried on the next connection.
+            }
+        }
+    }
+
+    private func statusChanged(_ status: DeviceStatus) {
+        self.status = status
+        observe(status)
+        guard let run else { return }
+        let settled = Date().timeIntervalSince(run.startedAt) > 15
+        let programStopped = status.mode == .standby && status.extra?.programStep == 0
+        guard Date() >= run.endsAt || (settled && programStopped) else { return }
+        self.run = nil
+        // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
+        // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
+        let minutesEarly = Int(run.endsAt.timeIntervalSinceNow / 60)
+        guard !isBusy else { return }
+        if minutesEarly > 2 {
+            record(.scheduleEnded(name: run.schedule.name, ending: .early(minutes: minutesEarly)), noticedLater: isJustConnected)
+        } else {
+            record(.scheduleEnded(name: run.schedule.name, ending: .finished), at: min(run.endsAt, Date()))
+        }
+        if minutesEarly > 2 {
+            app?.report("Your BedJet turned off \(Format.duration(minutesEarly)) before tonight's schedule ended "
+                + "(BedJet reason \(status.lastShutdownReason)).", from: self)
+        }
+    }
+
+    private func refreshSlots() async throws {
+        guard let link else { return }
+        deviceSlots = try await link.storedPrograms()
+        // Keep a copy of programs made elsewhere so reusing a slot never loses them.
+        for (index, program) in deviceSlots.enumerated() where index != slot {
+            guard let program else { continue }
+            app?.keepCopy(of: program)
+        }
+    }
+
+    // MARK: Tonight
+
+    func startTonight() async {
+        guard let schedule = tonight, let link else { return }
+        await perform {
+            // A V2 holds just the one sequence, which Lull always replaces.
+            let slot: Int
+            if link.generation == .v2 {
+                slot = 0
+            } else {
+                if self.deviceSlots.isEmpty { try await self.refreshSlots() }
+                guard let free = self.slot ?? self.deviceSlots.firstIndex(of: nil) else {
+                    self.needsSlotChoice = true
+                    return
+                }
+                slot = free
+                self.slot = slot
+            }
+            try await link.store(schedule.program, slot: slot)
+            try await link.startProgram(slot: slot)
+            try await self.confirmStarted()
+            self.run = ActiveRun(schedule: schedule, startedAt: Date())
+            self.record(.scheduleStarted(name: schedule.name, phases: schedule.phases))
+            if let demo = link as? DemoLink, AppModel.demoElapsedMinutes > 0 {
+                demo.skipAhead(minutes: AppModel.demoElapsedMinutes)
+                self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-AppModel.demoElapsedMinutes * 60))
+            }
+            try? await self.refreshSlots()
+        }
+    }
+
+    /// A BedJet that can't run a schedule stays off and raises a notification instead of starting it.
+    private func confirmStarted() async throws {
+        guard let link else { return }
+        for _ in 0..<20 {
+            try await Task.sleep(nanoseconds: 200_000_000)
+            guard let extra = status?.extra else { continue }
+            if extra.programStep > 0 { return }
+            let refusal: BedJetError? = switch extra.notification {
+            case Codec.Notification.programNeedsClock: .clockNotSet
+            case Codec.Notification.programTooLong: .programTooLong
+            default: nil
+            }
+            if let refusal {
+                try? await link.acknowledgeNotification()
+                throw refusal
+            }
+        }
+    }
+
+    func startTonight(replacingSlot slot: Int) async {
+        self.slot = slot
+        await startTonight()
+    }
+
+    func endNight() async {
+        guard let link else { return }
+        let name = run?.schedule.name
+        await perform {
+            try await link.setMode(.standby)
+            self.run = nil
+            self.record(.scheduleEnded(name: name, ending: .byYou))
+        }
+    }
+
+    // MARK: Remote
+
+    func setMode(_ mode: Mode) async {
+        guard let link else { return }
+        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
+        let endingSchedule = run?.schedule.name
+        await perform {
+            try await link.setMode(mode)
+            self.run = nil
+            if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
+            self.keepsLongestRuntime = true
+            try await self.extendRuntime(entering: mode)
+        }
+    }
+
+    func setTemperature(_ halfCelsius: Int) async {
+        guard let link else { return }
+        await perform {
+            try await link.setTemperature(halfCelsius)
+            try await self.extendRuntime()
+        }
+    }
+
+    func setFan(percent: Int) async {
+        guard let link else { return }
+        await perform {
+            try await link.setFan(step: percent / 5 - 1)
+            try await self.extendRuntime()
+        }
+    }
+
+    func setRuntime(minutes: Int) async {
+        guard let link else { return }
+        keepsLongestRuntime = false
+        await perform { try await link.setRuntime(minutes: minutes) }
+    }
+
+    /// Air started from the Remote runs for as long as the BedJet allows, until a shorter time is
+    /// picked there. Schedules keep their own timing.
+    private func extendRuntime(entering mode: Mode? = nil) async throws {
+        // A schedule started from another phone times its own phases; leave its timer alone.
+        guard keepsLongestRuntime, run == nil, runningElsewhereStep == nil, let link else { return }
+        // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
+        // the mode changes, so wait for it to report the new state before reading the limit.
+        try await Task.sleep(nanoseconds: 600_000_000)
+        for _ in 0..<20 {
+            if let status, status.isRunning, status.maxRuntimeMinutes > 0, mode == nil || status.mode == mode {
+                if status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60 {
+                    try await link.setRuntime(minutes: status.maxRuntimeMinutes)
+                }
+                return
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    func setLED(_ on: Bool) async {
+        guard let link else { return }
+        await perform { try await link.setLED(on) }
+    }
+
+    func setMuted(_ muted: Bool) async {
+        guard let link else { return }
+        await perform { try await link.setMuted(muted) }
+    }
+
+    private func perform(_ work: () async throws -> Void) async {
+        isBusy = true
+        defer {
+            isBusy = false
+            lastCommandAt = Date()
+        }
+        do {
+            try await takeControl()
+            try await work()
+        } catch {
+            app?.report(error.localizedDescription, from: self)
+        }
+    }
+
+    /// Using a control while another phone has the BedJet asks that phone to hand it over first.
+    private func takeControl() async throws {
+        guard let link, link.state != .ready else { return }
+        let wasElsewhere = link.state == .yielded
+        link.requestControl()
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            if link.state == .ready { return }
+        }
+        throw wasElsewhere ? BedJetError.inUseElsewhere : BedJetError.notConnected
+    }
+
+    /// Launching with `-logConnections` keeps a record of connection times, so they can be measured on a real phone.
+    private static let logsConnections = ProcessInfo.processInfo.arguments.contains("-logConnections")
+
+    private func logConnection() {
+        guard Self.logsConnections, let timing = (link as? BLELink)?.lastConnection else { return }
+        let line = String(format: "new connection: radio %.0f, link %.0f, services %.0f, usable %.0f ms, %@ (%@)\n",
+                          timing.radioOn * 1000, timing.linkUp * 1000, timing.services * 1000, timing.usable * 1000,
+                          timing.knownUnit ? "known unit" : "scanned", name ?? "unnamed")
+        log(line)
+    }
+
+    private func log(_ line: String) {
+        let file = URL.documentsDirectory.appending(path: "connections.txt")
+        let existing = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        try? (existing + Date().formatted(date: .omitted, time: .standard) + " " + line).write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: History
+
+    /// The settings worth remembering from a status report. The timer is carried along to tell when it ran out.
+    private struct Seen: Codable, Equatable {
+        var mode: Mode
+        var temperature: Int
+        var fanPercent: Int
+        var programStep: Int
+        var remainingSeconds: Int
+        var at: Date
+
+        init(_ status: DeviceStatus, programStep: Int) {
+            mode = status.mode
+            temperature = status.targetTemperature
+            fanPercent = status.fanPercent
+            self.programStep = programStep
+            remainingSeconds = status.remainingSeconds
+            at = Date()
+        }
+
+        func sameSettings(as other: Seen) -> Bool {
+            mode == other.mode && fanPercent == other.fanPercent && programStep == other.programStep
+                && (!mode.usesTemperature || temperature == other.temperature)
+        }
+    }
+
+    /// The first reports after connecting describe the BedJet as it was left, not something that just happened.
+    private var isJustConnected: Bool { Date().timeIntervalSince(connectedAt) < 10 }
+
+    /// Waits for the BedJet to hold a setting for a few seconds, so dragging a slider is one entry, not twenty.
+    private func observe(_ status: DeviceStatus) {
+        // Whether a schedule is running arrives in the second half of the report; without it a phase
+        // change can't be told from a change someone made.
+        guard let step = status.extra?.programStep else { return }
+        let seen = Seen(status, programStep: step)
+        let isNew = observed.map { !seen.sameSettings(as: $0) } ?? true
+        observed = seen
+        if let lastSeen, seen.sameSettings(as: lastSeen) {
+            settling?.cancel()
+            settling = nil
+            self.lastSeen = seen
+            return
+        }
+        guard isNew || settling == nil else { return }
+        settling?.cancel()
+        settling = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.commitObserved()
+        }
+    }
+
+    private func commitObserved() {
+        settling?.cancel()
+        settling = nil
+        guard let now = observed else { return }
+        // The first report ever only sets where the history starts from.
+        guard let before = lastSeen else {
+            lastSeen = now
+            return
+        }
+        lastSeen = now
+        let wasAway = before.at < connectedAt && isJustConnected
+        switch (before.programStep, now.programStep) {
+        case (0, 1...):
+            // Started from this phone, it is recorded once the BedJet confirms it.
+            if run == nil, !isBusy { record(.scheduleStarted(name: nil, phases: nil), noticedLater: wasAway) }
+            return
+        // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.
+        case (1..., 1...) where before.programStep != now.programStep: return
+        case (1..., 0) where now.mode == .standby: return
+        default: break
+        }
+        if now.mode == .standby {
+            guard before.mode != .standby else { return }
+            let timerEnds = before.at.addingTimeInterval(TimeInterval(before.remainingSeconds))
+            let ranOut = lastCommandAt < before.at && (before.remainingSeconds < 120 || (wasAway && timerEnds < Date()))
+            record(.off(timerRanOut: ranOut), at: ranOut ? min(timerEnds, Date()) : Date(), noticedLater: wasAway && !ranOut)
+        } else {
+            record(.air(mode: now.mode, temperature: now.temperature, fanPercent: now.fanPercent), noticedLater: wasAway)
+        }
+    }
+
+    private func record(_ event: HistoryEntry.Event, at date: Date = Date(), noticedLater: Bool = false) {
+        history.append(HistoryEntry(date: date, event: event, room: status?.ambientTemperature, noticedLater: noticedLater))
+        if let previous = history.dropLast().last, previous.date > date { history.sort { $0.date < $1.date } }
+        // Two months is plenty to compare one season's nights with the next.
+        let cutoff = Date().addingTimeInterval(-60 * 86400)
+        history.removeAll { $0.date < cutoff }
+        saveHistory()
+    }
+
+    private struct SavedHistory: Codable {
+        var entries: [HistoryEntry]
+        var lastSeen: Seen?
+    }
+
+    /// Each BedJet keeps its own history, and demo BedJets are separate ones, so pretend nights never mix with real ones.
+    static func historyFile(for id: UUID) -> URL {
+        URL.applicationSupportDirectory.appending(path: "history-\(id.uuidString).json")
+    }
+
+    private func loadHistory() {
+        let saved = AppModel.isEphemeral ? nil
+            : (try? Data(contentsOf: Self.historyFile(for: id))).flatMap { try? JSONDecoder().decode(SavedHistory.self, from: $0) }
+        history = saved?.entries ?? (AppModel.seedsDemoHistory ? HistoryEntry.samples() : [])
+        lastSeen = saved?.lastSeen
+    }
+
+    private func saveHistory() {
+        guard !AppModel.isEphemeral else { return }
+        let saved = SavedHistory(entries: history, lastSeen: lastSeen)
+        let file = Self.historyFile(for: id)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
+    }
+
+    func deleteHistory() {
+        settling?.cancel()
+        settling = nil
+        try? FileManager.default.removeItem(at: Self.historyFile(for: id))
+    }
+
+    // MARK: Schedules
+
+    /// Modes the Remote and the phase editor offer for this kind of BedJet.
+    var remoteModes: [Mode] { Mode.remoteModes.filter(generation.supports) }
+    var phaseModes: [Mode] { Mode.phaseModes.filter(generation.supports) }
+
+    func adjustsTemperature(_ mode: Mode) -> Bool { generation.adjustsTemperature(mode) }
+}

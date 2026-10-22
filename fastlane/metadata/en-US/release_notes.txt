@@ -1,9 +1,10 @@
-Lull now works with the BedJet V2.
+Lull now works with more than one BedJet, and you choose which ones.
 
-• Use the Remote to switch between Cool, Heat and Turbo, and to set fan speed, heat temperature and the shut-off timer.
-• Tonight's schedule is saved to your BedJet V2 and runs on it, so your phone can sleep too.
-• Schedules can use Cool, Heat, Turbo and Pause. Gentle heat and Dry are BedJet 3 only.
+• Pick your BedJet from a list of those nearby, with their signal strength. Lull only connects to BedJets you picked, so it never ends up on your partner's.
+• Connect to several BedJets at once, for example one on each side of the bed, and switch between them from the top of the screen. Each has its own schedule and history.
+• Give each BedJet a nickname, such as "My side".
 
 Also new:
-• History: see what your BedJet did each night and every change you made, so you can tell in the morning what helped.
-• If Lull can't find your BedJet, it now tells you what to check.
+• Widgets for the Home Screen, Lock Screen and StandBy show tonight's schedule, the night in progress and last night.
+• Start your night from Control Center, the Action button or Siri.
+• Lull works fully with VoiceOver and larger text, with higher contrast throughout.

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's near-black, lifted slightly at the top so the widget reads as a card on the Home Screen. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient android:angle="270" android:startColor="#191A1E" android:endColor="#000000" />
+    <corners android:radius="24dp" />
+</shape>

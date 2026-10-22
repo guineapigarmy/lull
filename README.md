@@ -19,8 +19,9 @@ room, or run out of battery; the night keeps going.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
 - **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in
-  StandBy, last night at a glance, and Start Night in Control Center and Siri. Widgets read what the app
-  last saved, so they work while the phone is away from the BedJet.
+  StandBy, last night at a glance, and Start Night in Control Center and Siri. On Android, Home Screen
+  widgets, Quick Settings tiles and app shortcuts. Widgets read what the app last saved, so they work while
+  the phone is away from the BedJet.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically, iPhone or Android.
 - **Several BedJets**: one on each side of the bed? Add both. They stay connected, each runs its own

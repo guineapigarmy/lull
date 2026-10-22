@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.icons.extended)
+    implementation(libs.glance.appwidget)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 
@@ -76,4 +77,5 @@ dependencies {
     androidTestImplementation(libs.compose.ui.test.junit4.accessibility)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.glance.appwidget.testing)
 }

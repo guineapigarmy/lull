@@ -107,6 +107,16 @@ data class ActiveRun(val schedule: Schedule, val startedAt: Long) {
 
     data class Current(val phase: Phase, val index: Int, val minutesLeft: Int)
 
+    /** When each phase ends, the last of them being the end of the night. */
+    val phaseEnds: List<Long>
+        get() {
+            var end = startedAt
+            return schedule.phases.map { phase ->
+                end += phase.minutes * 60_000L
+                end
+            }
+        }
+
     fun phase(now: Long): Current? {
         var elapsed = ((now - startedAt) / 60_000L).toInt()
         schedule.phases.forEachIndexed { index, phase ->
@@ -178,6 +188,14 @@ object Format {
         if (hours > 0) parts += if (hours == 1) "1 hour" else "$hours hours"
         if (rest > 0 || hours == 0) parts += if (rest == 1) "1 minute" else "$rest minutes"
         return parts.joinToString(", ")
+    }
+
+    /** A duration short enough for a small widget: "2h 25m", "45m", "7h". */
+    fun shortDuration(minutes: Int): String {
+        val hours = minutes / 60
+        val rest = minutes % 60
+        if (hours == 0) return "${rest}m"
+        return if (rest == 0) "${hours}h" else "${hours}h ${rest}m"
     }
 
     fun duration(minutes: Int): String {

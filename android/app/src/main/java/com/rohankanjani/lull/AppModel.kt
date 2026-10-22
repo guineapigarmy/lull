@@ -13,7 +13,10 @@ import androidx.lifecycle.viewModelScope
 import com.rohankanjani.lull.bedjetkit.DemoLink
 import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.StoredProgram
+import com.rohankanjani.lull.widgets.WidgetUpdates
+import com.rohankanjani.lull.widgets.requestTileUpdates
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -50,7 +53,11 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     private var fahrenheit by mutableStateOf(prefs.getBoolean("useFahrenheit", usesUSUnits()))
     var useFahrenheit: Boolean
         get() = fahrenheit
-        set(value) { fahrenheit = value; prefs.edit().putBoolean("useFahrenheit", value).apply() }
+        set(value) {
+            fahrenheit = value
+            prefs.edit().putBoolean("useFahrenheit", value).apply()
+            publishWidgets()
+        }
 
     private var demo by mutableStateOf(isEmulator() || prefs.getBoolean("demoMode", false))
     var demoMode: Boolean
@@ -240,7 +247,9 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
     }
 
     fun save() {
-        if (!isLoaded || options.ephemeral) return
+        if (!isLoaded) return
+        publishWidgets()
+        if (options.ephemeral) return
         val saved = Saved(
             schedules = schedules,
             fleet = if (demoMode) otherFleet else fleet,
@@ -251,6 +260,28 @@ class AppModel(application: Application, val options: LaunchOptions) : AndroidVi
             temporary.writeText(json.encodeToString(Saved.serializer(), saved))
             temporary.renameTo(file)
         }
+    }
+
+    // Widgets
+
+    /**
+     * Hands the widgets and tiles what they show, and redraws them when it changed. Widgets can't reach the BedJet,
+     * so this is all they know until Lull is opened again.
+     */
+    fun publishWidgets() {
+        if (!isLoaded) return
+        val bedJet = bedJet
+        val snapshot = WidgetSnapshot(
+            tonight = bedJet.tonight,
+            run = bedJet.run,
+            recentHistory = WidgetSnapshot.recent(bedJet.history),
+            useFahrenheit = useFahrenheit,
+            generation = bedJet.generation,
+        )
+        val context = getApplication<Application>()
+        if (!snapshot.save(context)) return
+        scope.launch { WidgetUpdates.refresh(context) }
+        requestTileUpdates(context)
     }
 
     // Last, so every property above is set before anything is loaded or connected.

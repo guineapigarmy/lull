@@ -2,7 +2,9 @@ package com.rohankanjani.lull
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
+import com.rohankanjani.lull.widgets.publishShortcuts
 import android.text.format.DateFormat
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -21,6 +23,12 @@ import com.rohankanjani.lull.ui.LullTheme
 import com.rohankanjani.lull.ui.RootScreen
 
 class MainActivity : ComponentActivity() {
+    /** A widget, tile or shortcut opened Lull again while it was already running. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        AppCommands.from(intent)?.let(AppCommands::send)
+    }
+
     private val model: AppModel by viewModels {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -55,6 +63,9 @@ class MainActivity : ComponentActivity() {
             }
             override fun onStop(owner: LifecycleOwner) = model.appMovedToBackground()
         })
+
+        publishShortcuts(this)
+        AppCommands.from(intent)?.let(AppCommands::send)
 
         setContent {
             val askForBluetooth = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {

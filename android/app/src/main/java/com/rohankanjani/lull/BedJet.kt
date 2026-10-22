@@ -581,6 +581,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     private fun saveHistory() {
+        app.publishWidgets()
         if (app.options.ephemeral) return
         val saved = SavedHistory(history, lastSeen)
         runCatching {

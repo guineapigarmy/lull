@@ -49,8 +49,16 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | BedJet sheet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
+| What widgets are handed | `Shared/WidgetSnapshot.swift` | `android/app/.../WidgetSnapshot.kt` |
+| Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/app/.../Commands.kt` |
+| Tonight widget | `LullWidgets/TonightWidget.swift` | `android/app/.../widgets/TonightWidget.kt` |
+| Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
+| Widget pieces and redraws | `LullWidgets/WidgetParts.swift` | `android/app/.../widgets/WidgetParts.kt`, `Drawing.kt` |
+| Start Night and Remote controls | `LullWidgets/Controls.swift` | `android/app/.../widgets/Tiles.kt` (Quick Settings tiles and app shortcuts) |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
+| Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
+| Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt` |
 | Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
 | Screen reader and text size tests | `LullTests/VoiceOverTests.swift`, `LullUITests/AccessibilityTests.swift` | `android/app/src/androidTest/.../AccessibilityTest.kt` (with the semantics checks in `LullUiTest.kt`) |
 | UI tests | `LullUITests/LullUITests.swift` | `android/app/src/androidTest/.../LullUiTest.kt` |
@@ -100,6 +108,11 @@ Platform conventions, not behaviour:
   equivalent, so TalkBack reads the same phases from the timeline's description instead.
 - An iPhone advertises one set of services at a time, so iOS sends every BedJet's hand-over request in one
   advertisement (`HandoffRequests`). Android runs one advertisement per BedJet side by side.
+- Android phones have no Lock Screen or StandBy widgets, so the Tonight and Last Night widgets are Home
+  Screen only. Quick Settings tiles stand in for the Control Center controls, and app shortcuts (long-press
+  the icon) for Siri and App Shortcuts. Both open Lull to start the night, as the iOS control does.
+- iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each
+  widget at each size with Glance's test runner, since launchers differ too much to drive.
 
 ## Style
 

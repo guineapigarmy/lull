@@ -43,6 +43,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -70,7 +71,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rohankanjani.lull.AppCommands
 import com.rohankanjani.lull.AppModel
+import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.BedJet
 import com.rohankanjani.lull.bedjetkit.LinkState
 import kotlinx.coroutines.launch
@@ -79,6 +82,23 @@ import kotlinx.coroutines.launch
 fun RootScreen(model: AppModel) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val bedJet = model.bedJet
+    // Widgets open the tab they show; tiles and shortcuts send commands.
+    DisposableEffect(Unit) {
+        AppCommands.handler = { command ->
+            when (command) {
+                is AppCommands.Command.Show -> selectedTab = command.tab.ordinal
+                AppCommands.Command.StartNight -> {
+                    selectedTab = LullTab.SCHEDULE.ordinal
+                    // A night already under way, from this phone or another, is left running and shown.
+                    val shown = model.bedJet
+                    if (shown.run == null && shown.runningElsewhereStep == null && !shown.isBusy) {
+                        model.scope.launch { shown.startTonight() }
+                    }
+                }
+            }
+        }
+        onDispose { AppCommands.handler = null }
+    }
     Scaffold(
         containerColor = Theme.background,
         // Each screen pads for the status bar itself, so it can scroll beneath it.

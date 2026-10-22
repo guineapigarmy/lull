@@ -160,9 +160,11 @@ final class LullUITests: XCTestCase {
 
         // With one BedJet the pill says how it's connected, and its settings offer to add another.
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
+        // It's at the bottom of the sheet, which on a smaller screen isn't loaded until scrolled to.
         let add = app.buttons["Add Another BedJet"]
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        for _ in 0..<3 where !add.exists { app.swipeUp() }
         XCTAssertTrue(add.waitForExistence(timeout: 5))
-        app.swipeUp()
         add.tap()
         app.buttons["Done"].tap()
 

@@ -154,6 +154,44 @@ final class LullUITests: XCTestCase {
         capture("history-row-expanded")
     }
 
+    func testAddAndSwitchBedJets() {
+        let heat = app.buttons["Heat"]
+        XCTAssertTrue(heat.waitForExistence(timeout: 10))
+
+        // With one BedJet the pill says how it's connected, and its settings offer to add another.
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
+        // It's at the bottom of the sheet, which on a smaller screen isn't loaded until scrolled to.
+        let add = app.buttons["Add Another BedJet"]
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        for _ in 0..<3 where !add.exists { app.swipeUp() }
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        app.buttons["Done"].tap()
+
+        // With two, the pill names the BedJet on screen instead.
+        let second = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet, BEDJET-DEMO-2,'")).firstMatch
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet, BEDJET-DEMO,'")).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        sleep(2)
+        heat.tap()
+        let timer = app.sliders["Turns off in"]
+        XCTAssertTrue(timer.waitForExistence(timeout: 5))
+
+        // The pill switches BedJets, and each keeps its own state.
+        second.tap()
+        XCTAssertTrue(app.buttons["BEDJET-DEMO"].waitForExistence(timeout: 5))
+        capture("bedjet-switcher")
+        app.buttons["BEDJET-DEMO"].tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(timer.waitForNonExistence(timeout: 5))
+
+        first.tap()
+        app.buttons["BEDJET-DEMO-2"].tap()
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        XCTAssertTrue(timer.waitForExistence(timeout: 5))
+        app.buttons["Off"].tap()
+    }
+
     func testRemoteAndDevice() {
         let heat = app.buttons["Heat"]
         XCTAssertTrue(heat.waitForExistence(timeout: 10))

@@ -84,6 +84,14 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(mine.data.count, 16)
     }
 
+    @MainActor
+    func testSimulatedBedJetsGoByTheirOwnNames() async throws {
+        let first = try await DemoLink().deviceName()
+        let second = try await DemoLink(name: "BEDJET-DEMO-2").deviceName()
+        XCTAssertEqual(first, DemoLink.defaultName)
+        XCTAssertEqual(second, "BEDJET-DEMO-2")
+    }
+
     func testRuntimeCommandSplitsHoursAndMinutes() {
         XCTAssertEqual([UInt8](Codec.setRuntime(minutes: 150)), [0x02, 2, 30])
     }

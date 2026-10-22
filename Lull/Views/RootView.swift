@@ -7,6 +7,7 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
+        @Bindable var bedJet = model.bedJet
         TabView(selection: $selectedTab) {
             Tab("Remote", systemImage: "dial.medium.fill", value: 0) { RemoteView() }
             Tab("Schedule", systemImage: "moon.stars.fill", value: 1) { ScheduleView() }
@@ -19,37 +20,48 @@ struct RootView: View {
             default: break
             }
         }
-        // Changes VoiceOver users would otherwise only notice by exploring the screen again.
-        .onChange(of: model.linkState) { old, state in
-            switch state {
-            case .ready: announce("BedJet connected")
-            case .yielded: announce("BedJet in use on another phone")
-            case .bluetoothOff: announce("Bluetooth is off")
-            case .unauthorized: announce("Bluetooth not allowed for Lull")
-            case .searching, .connecting: if old == .ready { announce("BedJet disconnected") }
-            }
-        }
-        .onChange(of: model.isSlowToFind) { _, slow in
-            if slow { announce("BedJet not found. The BedJet button at the top has tips.") }
-        }
-        .onChange(of: model.run?.schedule.name) { old, name in
-            if let name { announce("Started \(name)") } else if old != nil { announce("Night ended") }
-        }
+        // Remade for each BedJet, so switching to another isn't announced as its connection or night changing.
+        .background { Announcements(bedJet: bedJet).id(bedJet.id) }
         .alert("Something went wrong", isPresented: .init(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
         }
-        .confirmationDialog("Your BedJet's three slots are full", isPresented: $model.needsSlotChoice, titleVisibility: .visible) {
-            ForEach(Array(model.deviceSlots.enumerated()), id: \.offset) { index, program in
+        .confirmationDialog("Your BedJet's three slots are full", isPresented: $bedJet.needsSlotChoice, titleVisibility: .visible) {
+            ForEach(Array(bedJet.deviceSlots.enumerated()), id: \.offset) { index, program in
                 Button("Replace “\(program?.name ?? "Slot \(index + 1)")”") {
-                    Task { await model.startTonight(replacingSlot: index) }
+                    Task { await bedJet.startTonight(replacingSlot: index) }
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Lull keeps tonight's schedule in one slot on the BedJet. Pick one to reuse. Everything on the BedJet is already copied into your schedules.")
         }
+    }
+}
+
+/// Changes VoiceOver users would otherwise only notice by exploring the screen again.
+private struct Announcements: View {
+    let bedJet: BedJet
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: bedJet.linkState) { old, state in
+                switch state {
+                case .ready: announce("BedJet connected")
+                case .yielded: announce("BedJet in use on another phone")
+                case .bluetoothOff: announce("Bluetooth is off")
+                case .unauthorized: announce("Bluetooth not allowed for Lull")
+                case .searching, .connecting: if old == .ready { announce("BedJet disconnected") }
+                }
+            }
+            .onChange(of: bedJet.isSlowToFind) { _, slow in
+                if slow { announce("BedJet not found. The BedJet button at the top has tips.") }
+            }
+            .onChange(of: bedJet.run?.schedule.name) { old, name in
+                if let name { announce("Started \(name)") } else if old != nil { announce("Night ended") }
+            }
     }
 
     private func announce(_ message: String) {
@@ -77,6 +89,8 @@ struct Screen<Content: View>: View {
                             .scaledFont(34, .bold)
                             .accessibilityAddTraits(.isHeader)
                     }
+                    // A long BedJet name wraps rather than the screen's title.
+                    .layoutPriority(1)
                     Spacer(minLength: 0)
                     ConnectionPill { showsDevice = true }
                 }
@@ -92,44 +106,79 @@ struct Screen<Content: View>: View {
     }
 }
 
+/// Shows the BedJet's connection and opens its settings. With several BedJets it names the one on
+/// screen and switches between them.
 struct ConnectionPill: View {
     @Environment(AppModel.self) private var model
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(model.isConnected ? Color.green : Theme.neutral)
-                    .frame(width: 8, height: 8)
-                    .symbolEffect(.pulse, isActive: !model.isConnected)
-                Text(label).scaledFont(13, .semibold)
+        let bedJet = model.bedJet
+        if model.hasSeveralBedJets {
+            Menu {
+                Picker("BedJets", selection: Binding(get: { model.bedJet.id }, set: { model.select($0) })) {
+                    ForEach(model.bedJets) { bedJet in
+                        Text(model.title(of: bedJet)).tag(bedJet.id)
+                    }
+                }
+                .pickerStyle(.inline)
+                Section {
+                    Button("Add Another BedJet", systemImage: "plus") { model.addBedJet() }
+                    Button("BedJet Settings", systemImage: "gearshape") { action() }
+                }
+            } label: {
+                pill(model.title(of: bedJet), isConnected: bedJet.isConnected, switches: true)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .frame(minHeight: 36)
-            .background(Theme.raised, in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.hairline))
+            .menuOrder(.fixed)
+            .sensoryFeedback(.selection, trigger: bedJet.id)
+            .accessibilityLabel("BedJet, \(model.title(of: bedJet)), \(bedJet.spokenConnectionLabel)")
+            .accessibilityHint("Switches BedJet, adds another, or opens BedJet settings")
+        } else {
+            Button(action: action) { pill(bedJet.connectionLabel, isConnected: bedJet.isConnected) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("BedJet, \(bedJet.spokenConnectionLabel)")
+                .accessibilityHint("Shows the connection, BedJet settings and help finding it")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("BedJet, \(spokenLabel)")
-        .accessibilityHint("Shows the connection, BedJet settings and help finding it")
     }
 
-    private var spokenLabel: String {
-        model.linkState == .yielded && !model.isSlowToFind ? "in use on another phone" : label
+    private func pill(_ text: String, isConnected: Bool, switches: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(isConnected ? Color.green : Theme.neutral)
+                .frame(width: 8, height: 8)
+                .symbolEffect(.pulse, isActive: !isConnected)
+            Text(text).scaledFont(13, .semibold)
+            if switches {
+                Image(systemName: "chevron.up.chevron.down")
+                    .scaledFont(10, .bold)
+                    .foregroundStyle(Theme.secondary)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(minHeight: 36)
+        .background(Theme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(Theme.hairline))
     }
+}
 
-    private var label: String {
+extension BedJet {
+    /// A word or two on how the connection is going, short enough for the pill.
+    var connectionLabel: String {
         // Invites a tap through to the things worth checking.
-        if model.isSlowToFind { return "Not found" }
-        switch model.linkState {
-        case .ready: return model.demoMode && !AppModel.labelsDemoAsConnected ? "Demo" : "Connected"
+        if isSlowToFind { return "Not found" }
+        switch linkState {
+        case .ready: return isDemo && !AppModel.labelsDemoAsConnected ? "Demo" : "Connected"
         case .connecting: return "Connecting"
         case .searching: return "Searching"
         case .yielded: return "Other phone"
         case .bluetoothOff: return "Bluetooth off"
         case .unauthorized: return "No access"
         }
+    }
+
+    var spokenConnectionLabel: String {
+        linkState == .yielded && !isSlowToFind ? "in use on another phone" : connectionLabel
     }
 }

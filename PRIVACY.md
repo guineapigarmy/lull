@@ -1,8 +1,8 @@
 # Lull privacy policy
 
-_Last updated: October 21, 2026_
+_Last updated: October 22, 2026_
 
-Lull is a Bluetooth remote and scheduler for the BedJet 3, made by Rohan Kanjani. It is available for
+Lull is a Bluetooth remote and scheduler for the BedJet 3 and BedJet V2, made by Rohan Kanjani. It is available for
 iPhone and Android.
 
 ## What Lull collects
@@ -14,8 +14,9 @@ requests.
 
 - **Your schedules and settings** are stored on your phone. If your phone backs up apps (iCloud backup
   or Android backup), they are included in that backup under your own account.
-- **Which BedJet you use**: Lull remembers your BedJet's Bluetooth identifier and name so it can
-  reconnect quickly. This stays on the phone and is not included in backups.
+- **Which BedJets you use**: Lull remembers each BedJet you pick, by its Bluetooth identifier and name,
+  with any nickname you give it, so it connects only to those and reconnects quickly. Seeing which
+  BedJets are nearby happens on the phone; nothing about them leaves it.
 
 ## Bluetooth
 

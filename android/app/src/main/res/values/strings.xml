@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tonight_widget_description">Tonight\'s schedule, and where the night is up to once it\'s running.</string>
+    <string name="last_night_widget_description">How your BedJet ran last night, and the room temperature through it.</string>
+</resources>

@@ -377,6 +377,8 @@ final class BedJet: Identifiable {
         do {
             try await takeControl()
             try await work()
+        } catch is CancellationError {
+            // A newer slider move replaced this one; nothing went wrong.
         } catch {
             app?.report(error.localizedDescription, from: self)
         }

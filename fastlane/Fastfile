@@ -1,5 +1,7 @@
-# Builds the current commit, uploads it to App Store Connect and submits it for review.
-# Run by .github/workflows/app-store.yml on every push to main. One-time setup: docs/RELEASING.md.
+# Releases the current commit to both stores, one lane per platform:
+#   ios release      builds, uploads to App Store Connect and submits for review (.github/workflows/app-store.yml)
+#   android release  builds, uploads to Google Play and releases to production (.github/workflows/play-store.yml)
+# Both run on every push to main. One-time setup: docs/RELEASING.md.
 
 require "base64"
 require "tmpdir"
@@ -11,6 +13,7 @@ BUNDLE_ID = "com.rohankanjani.lull"
 SIGNED_TARGETS = { "Lull" => BUNDLE_ID, "LullWidgets" => "#{BUNDLE_ID}.widgets" }
 TEAM_ID = "7786XZ3V4B"
 PROJECT = "Lull.xcodeproj"
+PACKAGE_NAME = "com.rohankanjani.lull"
 
 # Reads a build setting of the app target. `sh` runs from the fastlane folder, hence the "../".
 def build_setting(name)
@@ -88,6 +91,47 @@ platform :ios do
       run_precheck_before_submit: false,
       submission_information: { add_id_info_uses_idfa: false },
       force: true
+    )
+  end
+end
+
+platform :android do
+  desc "Build the current commit and release it on Google Play"
+  lane :release do
+    json_key = ENV.fetch("PLAY_SERVICE_ACCOUNT_JSON")
+    track = ENV.fetch("PLAY_TRACK", "production")
+    # Both apps share MARKETING_VERSION; android/app/build.gradle.kts reads it from the Xcode project too.
+    version = File.read("../#{PROJECT}/project.pbxproj")[/MARKETING_VERSION = ([0-9.]+);/, 1]
+
+    released = google_play_track_release_names(package_name: PACKAGE_NAME, track: track, json_key_data: json_key)
+    if released.include?(version)
+      UI.important("#{version} is already on Google Play. Raise MARKETING_VERSION to release.")
+      puts "::notice title=Nothing released::#{version} is already on Google Play. Raise MARKETING_VERSION to release."
+      next
+    end
+
+    # Version codes must only ever go up, across every track.
+    codes = %w[production beta alpha internal].flat_map do |name|
+      google_play_track_version_codes(package_name: PACKAGE_NAME, track: name, json_key_data: json_key)
+    rescue StandardError
+      []
+    end
+    code = (codes.map(&:to_i).max || 0) + 1
+
+    # Signing comes from LULL_UPLOAD_* in the environment; see android/app/build.gradle.kts.
+    gradle(project_dir: "android", task: "bundle", build_type: "Release", properties: { "versionCode" => code })
+
+    upload_to_play_store(
+      package_name: PACKAGE_NAME,
+      json_key_data: json_key,
+      track: track,
+      aab: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH],
+      version_name: version,
+      # A brand-new app only accepts draft releases until its first one is sent for review in Play Console.
+      release_status: ENV.fetch("PLAY_RELEASE_STATUS", "completed"),
+      metadata_path: "fastlane/metadata/android",
+      skip_upload_images: true,
+      skip_upload_screenshots: true
     )
   end
 end

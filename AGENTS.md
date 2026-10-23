@@ -101,6 +101,13 @@ cd android && ./gradlew :app:connectedDebugAndroidTest   # needs an emulator or 
 Both simulators run against the simulated BedJet, so no hardware is needed. For UI changes, compare
 the two apps side by side: the screens should look like the same app.
 
+The tests run debug builds. Release builds are shrunk by R8, which can remove classes a library only
+loads by name, so after adding or updating an Android dependency, install and open a release build too:
+
+```bash
+cd android && ./gradlew :app:installRelease   # signed with the debug key unless the upload key is set
+```
+
 ## Known differences
 
 Platform conventions, not behaviour:

@@ -40,7 +40,9 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (uploadKeystore != null) signingConfig = signingConfigs.getByName("upload")
+            // Without the upload key, the debug key signs it, so anyone can install a release build to check it.
+            // Google Play only accepts the upload key.
+            signingConfig = signingConfigs.getByName(if (uploadKeystore != null) "upload" else "debug")
         }
     }
 
@@ -68,6 +70,9 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.icons.extended)
     implementation(libs.glance.appwidget)
+    // Glance brings WorkManager 2.7, whose database R8 strips from release builds, so every launch crashed.
+    // Newer WorkManager carries the keep rules it needs.
+    implementation(libs.work.runtime)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

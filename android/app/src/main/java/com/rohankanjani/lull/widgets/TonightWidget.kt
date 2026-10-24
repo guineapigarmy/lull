@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
+import androidx.glance.currentState
 import androidx.glance.GlanceModifier
 import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
@@ -54,7 +55,8 @@ class TonightWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = WidgetSnapshot.load(context) ?: WidgetSnapshot()
         WidgetUpdates.scheduleNext(context, snapshot)
-        provideContent { TonightContent(snapshot, System.currentTimeMillis()) }
+        // The BedJet the widget is set to, drawn as the one on screen is.
+        provideContent { TonightContent(currentSnapshot().showing(currentState(PickedBedJet)), System.currentTimeMillis()) }
     }
 
     companion object {
@@ -78,7 +80,8 @@ fun TonightContent(snapshot: WidgetSnapshot, now: Long) {
         GlanceModifier
             .fillMaxSize()
             .widgetBackground()
-            .clickable(actionStartActivity(AppCommands.openIntent(context, LullTab.SCHEDULE)))
+            // Opens Lull on the BedJet the widget shows, which may not be the one on screen.
+            .clickable(actionStartActivity(AppCommands.openIntent(context, LullTab.SCHEDULE, showing = snapshot.onScreen)))
             .padding(WidgetPadding),
     ) {
         val run = snapshot.run(now)
@@ -104,16 +107,22 @@ private fun Running(snapshot: WidgetSnapshot, run: ActiveRun, now: Long) {
     val minutesLeft = current?.minutesLeft ?: 0
     val progress = run.progress(now)
     val wake = clock(run.endsAt)
-    val spoken = listOfNotNull(
-        run.schedule.name,
-        current?.let { "phase ${it.index + 1} of ${run.schedule.phases.size}" },
-        current?.let { "${it.phase.mode.activity}, ${Format.spokenDuration(it.minutesLeft)} left" },
-        "ends at $wake",
-    ).joinToString(", ")
+    val spoken = snapshot.spoken(
+        listOfNotNull(
+            run.schedule.name,
+            current?.let { "phase ${it.index + 1} of ${run.schedule.phases.size}" },
+            current?.let { "${it.phase.mode.activity}, ${Format.spokenDuration(it.minutesLeft)} left" },
+            "ends at $wake",
+        ).joinToString(", "),
+    )
     val described = GlanceModifier.fillMaxSize().semantics { contentDescription = spoken }
 
     if (isSmall) {
         Column(described) {
+            snapshot.headingName?.let {
+                WidgetEyebrow(it)
+                Gap(3.dp)
+            }
             ModeLabel(mode)
             Gap(4.dp)
             Text(run.schedule.name, style = widgetText(17.sp, weight = FontWeight.Medium), maxLines = 2)
@@ -126,7 +135,7 @@ private fun Running(snapshot: WidgetSnapshot, run: ActiveRun, now: Long) {
         return
     }
     Column(described) {
-        Header(current?.let { "Phase ${it.index + 1} of ${run.schedule.phases.size}" } ?: "Finishing", run.schedule.name) {
+        Header(snapshot.headed(current?.let { "Phase ${it.index + 1} of ${run.schedule.phases.size}" } ?: "Finishing"), run.schedule.name) {
             Column(horizontalAlignment = Alignment.End) {
                 ModeLabel(mode)
                 Gap(3.dp)
@@ -147,9 +156,14 @@ private fun Running(snapshot: WidgetSnapshot, run: ActiveRun, now: Long) {
 @Composable
 private fun Planned(snapshot: WidgetSnapshot, schedule: Schedule, now: Long) {
     val context = LocalContext.current
-    val spoken = "Tonight, ${schedule.name}, ${schedule.spokenSummary}"
+    val spoken = snapshot.spoken("Tonight, ${schedule.name}, ${schedule.spokenSummary}")
     if (isSmall) {
         Column(GlanceModifier.fillMaxSize().semantics { contentDescription = spoken }) {
+            // Stacked: a name and "Tonight" don't fit across a small widget together.
+            snapshot.headingName?.let {
+                WidgetEyebrow(it)
+                Gap(3.dp)
+            }
             WidgetEyebrow("Tonight")
             Gap(4.dp)
             Text(schedule.name, style = widgetText(17.sp, weight = FontWeight.Medium), maxLines = 2)
@@ -162,12 +176,13 @@ private fun Planned(snapshot: WidgetSnapshot, schedule: Schedule, now: Long) {
         return
     }
     Column(GlanceModifier.fillMaxSize()) {
-        Header("Tonight", schedule.name) {
+        Header(snapshot.headed("Tonight"), schedule.name) {
             Box(
                 GlanceModifier
                     .background(Color.White)
                     .cornerRadius(16.dp)
-                    .clickable(actionStartActivity(AppCommands.startNightIntent(context)))
+                    // Started on the BedJet the widget shows, which may not be the one on screen in Lull.
+                    .clickable(actionStartActivity(AppCommands.startNightIntent(context, snapshot.bedJet(null)?.id)))
                     .semantics { contentDescription = "Start Night" }
                     .padding(horizontal = 16.dp, vertical = 7.dp),
             ) {

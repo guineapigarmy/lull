@@ -208,6 +208,7 @@ final class BedJet: Identifiable {
         statusReceivedAt = Date()
         observe(status)
         app?.publishLiveActivities()
+        app?.publishWidgets()
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
         let programStopped = status.mode == .standby && status.extra?.programStep == 0

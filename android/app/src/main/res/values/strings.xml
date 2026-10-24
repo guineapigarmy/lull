@@ -2,4 +2,7 @@
 <resources>
     <string name="tonight_widget_description">Tonight\'s schedule, and where the night is up to once it\'s running.</string>
     <string name="last_night_widget_description">How your BedJet ran last night, and the room temperature through it.</string>
+    <string name="status_widget_description">What your BedJet is doing now, and the time left.</string>
+    <string name="both_sides_widget_description">Both BedJets at a glance, one on each side of the bed.</string>
+    <string name="quick_remote_widget_description">Three buttons that open Lull and set your BedJet. Edit the widget to choose each one\'s mode, time, temperature and fan.</string>
 </resources>

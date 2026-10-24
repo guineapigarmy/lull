@@ -256,6 +256,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         statusReceivedAt = System.currentTimeMillis()
         observe(status)
         app.publishLiveNotifications()
+        app.publishWidgets()
         val run = run ?: return
         val now = System.currentTimeMillis()
         val settled = now - run.startedAt > 15_000

@@ -438,6 +438,9 @@ class AppModel(
      */
     fun publishWidgets() {
         if (!isLoaded || !storage.publishesWidgets) return
+        val context = getApplication<Application>()
+        // Called with every report from a BedJet, so what was last handed over is kept rather than read back.
+        val before = publishedWidgets ?: WidgetSnapshot.load(context)
         val bedJet = bedJet
         val snapshot = WidgetSnapshot(
             tonight = bedJet?.tonight,
@@ -445,11 +448,25 @@ class AppModel(
             recentHistory = WidgetSnapshot.recent(bedJet?.history.orEmpty()),
             useFahrenheit = useFahrenheit,
             generation = bedJet?.generation ?: Generation.V3,
+            bedJets = bedJets.map { one -> widgetBedJet(one, before?.bedJets?.firstOrNull { it.id == one.id }) },
+            onScreen = selectedID,
         )
-        val context = getApplication<Application>()
-        if (!snapshot.save(context)) return
+        val changed = snapshot != before
+        publishedWidgets = snapshot
+        if (!changed || !snapshot.save(context)) return
         scope.launch { WidgetUpdates.refresh(context) }
         requestTileUpdates(context)
+    }
+
+    private var publishedWidgets: WidgetSnapshot? = null
+
+    /** One BedJet as the widgets see it. */
+    private fun widgetBedJet(bedJet: BedJet, before: WidgetBedJet?): WidgetBedJet {
+        val now = System.currentTimeMillis()
+        val current = LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation, now)
+        val isWaiting = WidgetSnapshot.isWaiting(bedJet.status, bedJet.isSavingSchedule)
+        val live = WidgetSnapshot.live(current, before?.live, isWaiting, now)
+        return WidgetBedJet(bedJet.id, title(bedJet), live, bedJet.tonight, bedJet.generation, WidgetSnapshot.recent(bedJet.history))
     }
 
     // Live Updates
@@ -498,7 +515,7 @@ class AppModel(
         /** Four characters of the identifier this phone knows the unit by. They never change, unlike names. */
         fun code(unit: String): String = unit.filter { it.isLetterOrDigit() }.take(4).uppercase()
 
-        private fun usesUSUnits(): Boolean = LocaleData.getMeasurementSystem(ULocale.getDefault()) == LocaleData.MeasurementSystem.US
+        internal fun usesUSUnits(): Boolean = LocaleData.getMeasurementSystem(ULocale.getDefault()) == LocaleData.MeasurementSystem.US
 
         /** The emulator has no BedJet nearby, so it always uses the simulated one, like the iOS Simulator. */
         private fun isEmulator(): Boolean =

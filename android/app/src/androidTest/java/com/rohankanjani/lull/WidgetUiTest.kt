@@ -18,10 +18,16 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rohankanjani.lull.widgets.BothSidesContent
 import com.rohankanjani.lull.widgets.LastNightContent
+import com.rohankanjani.lull.widgets.QuickRemoteContent
+import com.rohankanjani.lull.widgets.StatusContent
+import com.rohankanjani.lull.widgets.StatusWidget
 import com.rohankanjani.lull.widgets.LastNightWidget
 import com.rohankanjani.lull.widgets.TonightContent
 import com.rohankanjani.lull.widgets.TonightWidget
+import com.rohankanjani.lull.bedjetkit.Mode
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +54,103 @@ class WidgetUiTest {
             provideComposable(content)
             check()
         }
+
+    @Test
+    fun statusShowsWhatEachBedJetIsDoing() {
+        val other = running.bedJets[1].id
+        for (size in listOf(StatusWidget.SMALL, StatusWidget.MEDIUM)) {
+            draw(size, { StatusContent(running, null, now) }) {
+                onNode(glanceDescription("My side, Cool Drift, phase 2 of 4, Cooling")).assertExists()
+            }
+            draw(size, { StatusContent(running, other, now) }) {
+                onNode(glanceDescription("Other side, Cooling, 22° · Fan 40%")).assertExists()
+            }
+        }
+        // Nothing running from this phone: tonight's schedule, with a way to start it.
+        val idle = running.copy(bedJets = running.bedJets.map { it.copy(live = null) })
+        draw(StatusWidget.SMALL, { StatusContent(idle, null, now) }) {
+            onNode(glanceDescription("My side, Tonight, Cool Drift")).assertExists()
+            onNode(glanceDescriptionEqualTo("Start Night")).assertExists()
+        }
+        // No BedJet chosen yet, or the one this widget was set to was forgotten.
+        draw(StatusWidget.SMALL, { StatusContent(WidgetSnapshot(), null, now) }) {
+            onNode(glanceDescriptionEqualTo("No BedJet yet. Open Lull to choose your BedJet.")).assertExists()
+        }
+    }
+
+    @Test
+    fun bothSidesShowsEachSide() {
+        draw(StatusWidget.MEDIUM, { BothSidesContent(running, null, null, now) }) {
+            onNode(glanceDescription("My side, Cool Drift")).assertExists()
+            onNode(glanceDescription("Other side, Cooling")).assertExists()
+        }
+        val one = running.copy(bedJets = running.bedJets.take(1))
+        draw(StatusWidget.MEDIUM, { BothSidesContent(one, null, null, now) }) {
+            onNode(glanceDescriptionEqualTo("Add a second BedJet in Lull.")).assertExists()
+        }
+        // A side set to a BedJet forgotten since.
+        draw(StatusWidget.MEDIUM, { BothSidesContent(running, "forgotten", null, now) }) {
+            onNode(glanceDescriptionEqualTo("Edit the widget to choose a BedJet.")).assertExists()
+        }
+    }
+
+    @Test
+    fun tonightShowsTheBedJetItIsSetTo() {
+        // The other side has no night running, so it offers to start its own, and says which side it is.
+        draw(TonightWidget.MEDIUM, { TonightContent(running.showing(running.bedJets[1].id), now) }) {
+            onNode(glanceDescriptionEqualTo("Start Night")).assertExists()
+            onNode(glanceTextEqualTo("OTHER SIDE · TONIGHT")).assertExists()
+        }
+        draw(TonightWidget.MEDIUM, { TonightContent(running.showing(running.bedJets[0].id), now) }) {
+            onNode(glanceDescription("Cool Drift, phase 2 of 4, Cooling")).assertExists()
+        }
+    }
+
+    @Test
+    fun quickRemoteOffersItsPresets() {
+        for (size in listOf(StatusWidget.SMALL, StatusWidget.MEDIUM)) {
+            draw(size, { QuickRemoteContent(running, RemotePreset.defaults, null, now) }) {
+                onNode(glanceDescriptionEqualTo("Cool · 30 min, 22° · Fan 40%")).assertExists()
+                onNode(glanceDescriptionEqualTo("Heat · 15 min, 33° · Fan 40%")).assertExists()
+                onNode(glanceDescriptionEqualTo("Turn off")).assertExists()
+            }
+        }
+        // Edited: each button as chosen, with no Off at all.
+        val edited = listOf(
+            PresetChoice(Mode.TURBO, 60, fanPercent = 100),
+            PresetChoice(Mode.DRY, 45, fanPercent = 60),
+            PresetChoice(Mode.EXTENDED_HEAT, 90, degrees = 30, fanPercent = 20),
+        ).map { it.preset(fahrenheit = false) }
+        draw(StatusWidget.MEDIUM, { QuickRemoteContent(running, edited, null, now) }) {
+            onNode(glanceDescriptionEqualTo("Turbo · 10 min, Fan 100%")).assertExists()
+            onNode(glanceDescriptionEqualTo("Dry · 45 min, 30° · Fan 60%")).assertExists()
+            onNode(glanceDescriptionEqualTo("Gentle heat · 1 hr 30 min, 30° · Fan 20%")).assertExists()
+            onNode(glanceDescriptionEqualTo("Turn off")).assertDoesNotExist()
+        }
+        // Set to one side of the bed: that side, by name, as there's more than one to tell apart.
+        val other = running.bedJets[1].id
+        draw(StatusWidget.MEDIUM, { QuickRemoteContent(running, RemotePreset.defaults, other, now) }) {
+            onNode(glanceTextEqualTo("OTHER SIDE")).assertExists()
+            onNode(glanceTextEqualTo("MY SIDE")).assertDoesNotExist()
+        }
+        // Set to one that has since been forgotten: it says so.
+        draw(StatusWidget.MEDIUM, { QuickRemoteContent(running, RemotePreset.defaults, "forgotten", now) }) {
+            onNode(glanceTextEqualTo("FORGOTTEN BEDJET")).assertExists()
+        }
+    }
+
+    @Test
+    fun quickRemoteButtonsCarryTheirPreset() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        for (preset in RemotePreset.defaults + RemotePreset(Mode.DRY, 45, 60, 60)) {
+            assertEquals(AppCommands.Command.Remote(preset), AppCommands.from(AppCommands.remoteIntent(context, preset)))
+            assertEquals(AppCommands.Command.Remote(preset, "right"), AppCommands.from(AppCommands.remoteIntent(context, preset, "right")))
+        }
+        // Buttons set differently open Lull at different addresses, so Android keeps their taps apart.
+        val links = RemotePreset.defaults.map { AppCommands.remoteIntent(context, it).dataString } +
+            AppCommands.remoteIntent(context, RemotePreset.defaults[0], "right").dataString
+        assertEquals(links.size, links.toSet().size)
+    }
 
     @Test
     fun tonightShowsWhereTheNightIsUpTo() {

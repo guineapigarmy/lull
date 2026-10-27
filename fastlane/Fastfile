@@ -9,8 +9,14 @@ require "tmpdir"
 default_platform(:ios)
 
 BUNDLE_ID = "com.rohankanjani.lull"
-# Each target that is signed, with its bundle identifier. The widgets ship inside the app.
-SIGNED_TARGETS = { "Lull" => BUNDLE_ID, "LullWidgets" => "#{BUNDLE_ID}.widgets" }
+# Each target that is signed, with its bundle identifier. The widgets and the watch app ship inside the app, and the
+# watch face complications inside the watch app.
+SIGNED_TARGETS = {
+  "Lull" => BUNDLE_ID,
+  "LullWidgets" => "#{BUNDLE_ID}.widgets",
+  "LullWatch" => "#{BUNDLE_ID}.watchkitapp",
+  "LullWatchWidgets" => "#{BUNDLE_ID}.watchkitapp.widgets"
+}
 TEAM_ID = "7786XZ3V4B"
 PROJECT = "Lull.xcodeproj"
 PACKAGE_NAME = "com.rohankanjani.lull"
@@ -73,7 +79,7 @@ platform :ios do
       configuration: "Release",
       export_method: "app-store",
       export_options: { provisioningProfiles: profiles },
-      # The widgets must carry the app's version, and only the app's is raised in Xcode.
+      # The widgets and the watch app must carry the app's version, and only the app's is raised in Xcode.
       xcargs: "CURRENT_PROJECT_VERSION=#{build} MARKETING_VERSION=#{version}",
       output_directory: "build",
       clean: true
@@ -110,25 +116,47 @@ platform :android do
       next
     end
 
-    # Version codes must only ever go up, across every track.
-    codes = %w[production beta alpha internal].flat_map do |name|
+    # Version codes must only ever go up, across every track, the watch's included.
+    tracks = %w[production beta alpha internal]
+    codes = (tracks + tracks.map { |name| "wear:#{name}" }).flat_map do |name|
       google_play_track_version_codes(package_name: PACKAGE_NAME, track: name, json_key_data: json_key)
     rescue StandardError
       []
     end
     code = (codes.map(&:to_i).max || 0) + 1
 
-    # Signing comes from LULL_UPLOAD_* in the environment; see android/app/build.gradle.kts.
+    # Signing comes from LULL_UPLOAD_* in the environment; see android/app/build.gradle.kts. This builds the phone
+    # app's bundle with this code and the watch app's with the next.
     gradle(project_dir: "android", task: "bundle", build_type: "Release", properties: { "versionCode" => code })
+    bundles = lane_context[SharedValues::GRADLE_ALL_AAB_OUTPUT_PATHS]
+    # Told apart by module, from the end of the path, wherever the repository is checked out.
+    phone = bundles.find { |path| path.include?("/android/app/build/") }
+    watch = bundles.find { |path| path.include?("/android/wear/build/") }
 
     upload_to_play_store(
       package_name: PACKAGE_NAME,
       json_key_data: json_key,
       track: track,
-      aab: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH],
+      aab: phone,
       version_name: version,
       # A brand-new app only accepts draft releases until its first one is sent for review in Play Console.
       release_status: ENV.fetch("PLAY_RELEASE_STATUS", "completed"),
+      metadata_path: "fastlane/metadata/android",
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+
+    # The watch app goes out on the Wear OS track of the same release, once Wear OS is added to the app in Play
+    # Console (docs/RELEASING.md). The listing is the phone's, uploaded above.
+    upload_to_play_store(
+      package_name: PACKAGE_NAME,
+      json_key_data: json_key,
+      track: "wear:#{track}",
+      aab: watch,
+      version_name: version,
+      release_status: ENV.fetch("PLAY_RELEASE_STATUS", "completed"),
+      skip_upload_metadata: true,
+      skip_upload_changelogs: false,
       metadata_path: "fastlane/metadata/android",
       skip_upload_images: true,
       skip_upload_screenshots: true

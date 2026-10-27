@@ -117,8 +117,9 @@ final class BedJet: Identifiable {
     // MARK: Connection
 
     /// Starts talking to the BedJet. Only the one on screen asks another phone to hand it over;
-    /// the rest connect whenever they are free.
-    func connect(asking: Bool) {
+    /// the rest connect whenever they are free. Off screen (`resuming: false`) the link is only set up, to start once
+    /// Lull comes on screen or an errand from the watch needs it.
+    func connect(asking: Bool, resuming: Bool = true) {
         link?.stop()
         status = nil
         firmware = nil
@@ -132,7 +133,7 @@ final class BedJet: Identifiable {
         self.link = link
         linkState = link.state
         lastRefresh = .distantPast
-        resume(asking: asking)
+        if resuming { resume(asking: asking) }
     }
 
     /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
@@ -159,6 +160,22 @@ final class BedJet: Identifiable {
         searchTimer = nil
         isSlowToFind = false
         timeSearch()
+    }
+
+    /// Whether the BedJet has reported everything it does since `date`, both halves of its report, so what it's doing
+    /// now is known rather than what Lull last saw.
+    func hasReported(since date: Date) -> Bool {
+        guard let statusReceivedAt, statusReceivedAt >= date else { return false }
+        return status?.extra != nil
+    }
+
+    /// Waits for the BedJet to say what it's doing, so an errand from the watch acts on that. Gives up after `timeout`,
+    /// leaving the errand's own commands to say what's wrong.
+    func awaitReport(since date: Date, timeout: TimeInterval = 10) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !hasReported(since: date) {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     /// Counts how long Lull has been looking, across searching and connecting, but not while

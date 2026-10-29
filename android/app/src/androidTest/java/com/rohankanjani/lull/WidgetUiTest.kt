@@ -189,7 +189,10 @@ class WidgetUiTest {
 
     @Test
     fun startNightFromATileOrShortcut() {
-        val intent = AppCommands.startNightIntent(ApplicationProvider.getApplicationContext()).putExtra("ephemeral", true)
+        // Without wake times, as launchLull starts, so the night starts whatever the time of day.
+        val intent = AppCommands.startNightIntent(ApplicationProvider.getApplicationContext())
+            .putExtra("ephemeral", true)
+            .putExtra("noWakeTimes", true)
         ActivityScenario.launch<MainActivity>(intent).use {
             // Lull opens on the Schedule and starts tonight's schedule once the BedJet connects.
             compose.waitFor(hasText("End Night"), timeoutMillis = 15_000)

@@ -64,7 +64,8 @@ final class BedJet: Identifiable {
     @ObservationIgnored private weak var app: AppModel?
     private var link: BedJetLink?
     private var lastRefresh = Date.distantPast
-    private var keepsLongestRuntime = true
+    /// How air from the Remote is timed. Schedules keep their own timing.
+    private(set) var remoteTimer = RemoteTimer.longest
     private var searchTimer: Task<Void, Never>?
     /// What the history last recorded the BedJet doing, kept across launches to notice what changed while Lull was closed.
     private var lastSeen: Seen?
@@ -263,8 +264,14 @@ final class BedJet: Identifiable {
         isSavingSchedule = true
         defer { isSavingSchedule = false }
         await perform {
+            // Demos that show a night in progress pretend it started earlier.
+            let elapsed = link is DemoLink ? AppModel.demoElapsedMinutes : 0
+            let startedAt = Date().addingTimeInterval(TimeInterval(-elapsed * 60))
             // Known for certain once connected, which `perform` waited for; checked before anything is written.
-            if let problem = self.problem(running: schedule) { throw BedJetError.invalidProgram(problem) }
+            if let problem = self.problem(running: schedule, at: startedAt) { throw BedJetError.invalidProgram(problem) }
+            // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
+            // the last step, so it keeps to it by its own clock.
+            let tonight = schedule.resolved(startingAt: Format.minuteOfDay(startedAt))
             // A V2 holds just the one sequence, which Lull always replaces.
             let slot: Int
             if link.generation == .v2 {
@@ -278,15 +285,13 @@ final class BedJet: Identifiable {
                 slot = free
                 self.slot = slot
             }
-            try await link.store(schedule.program, slot: slot)
+            try await link.store(tonight.program, slot: slot)
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
-            self.run = ActiveRun(schedule: schedule, startedAt: Date())
-            self.record(.scheduleStarted(name: schedule.name, phases: schedule.phases))
-            if let demo = link as? DemoLink, AppModel.demoElapsedMinutes > 0 {
-                demo.skipAhead(minutes: AppModel.demoElapsedMinutes)
-                self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-AppModel.demoElapsedMinutes * 60))
-            }
+            self.run = ActiveRun(schedule: tonight, startedAt: startedAt)
+            self.remoteTimer = .longest
+            self.record(.scheduleStarted(name: schedule.name, phases: tonight.phases))
+            if elapsed > 0, let demo = link as? DemoLink { demo.skipAhead(minutes: elapsed) }
             try? await self.refreshSlots()
         }
     }
@@ -331,6 +336,12 @@ final class BedJet: Identifiable {
         guard let link else { return }
         // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
         let endingSchedule = run?.schedule.name
+        // Shown as a time, the end on screen holds across modes: a time picked here, or the BedJet's own countdown, as
+        // after Lull relaunches and no longer knows a time was picked.
+        if app?.remoteTimerShowsTime == true, mode != .standby, !remoteTimer.isAhead, run == nil, runningElsewhereStep == nil,
+           let status, status.isRunning, status.remainingSeconds > 60 {
+            remoteTimer = .until(Date().addingTimeInterval(TimeInterval(status.remainingSeconds)))
+        }
         await perform {
             try await link.setMode(mode)
             // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
@@ -338,7 +349,9 @@ final class BedJet: Identifiable {
             if mode == .standby { self.status?.mode = .standby }
             self.run = nil
             if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
-            self.keepsLongestRuntime = true
+            // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
+            // mode starts at its longest run, as the timer always has.
+            if mode == .standby || !self.remoteTimer.isAhead || self.app?.remoteTimerShowsTime != true { self.remoteTimer = .longest }
             try await self.extendRuntime(entering: mode)
         }
     }
@@ -361,21 +374,39 @@ final class BedJet: Identifiable {
 
     func setRuntime(minutes: Int) async {
         guard let link else { return }
-        keepsLongestRuntime = false
+        remoteTimer = .picked
         await perform { try await link.setRuntime(minutes: minutes) }
     }
 
-    /// Air started from the Remote runs for as long as the BedJet allows, until a shorter time is
-    /// picked there. Schedules keep their own timing.
+    /// Turns the air off at `end`, or as near it as the mode allows. Lull keeps aiming at it as the temperature and fan
+    /// change, since each changes how long the BedJet lets the air run, and as the mode changes while the Remote shows
+    /// the time.
+    func setRuntime(until end: Date) async {
+        guard let link else { return }
+        remoteTimer = .until(end)
+        let limit = status.map { $0.maxRuntimeMinutes > 0 ? $0.maxRuntimeMinutes : $0.mode.maxMinutes } ?? Limits.maxStepMinutes
+        await perform { try await link.setRuntime(minutes: self.minutes(until: end, limit: limit)) }
+    }
+
+    /// Minutes from now until `end`, to the nearest minute, as far as `limit` allows.
+    private func minutes(until end: Date, limit: Int) -> Int {
+        min(max(Int((end.timeIntervalSinceNow / 60).rounded()), 1), limit)
+    }
+
+    /// Air started from the Remote runs for as long as the BedJet allows, or until the time picked there, until a
+    /// duration is picked instead. Schedules keep their own timing.
     private func extendRuntime(entering mode: Mode? = nil) async throws {
         // A schedule started from another phone times its own phases; leave its timer alone.
-        guard keepsLongestRuntime, run == nil, runningElsewhereStep == nil, let link else { return }
+        guard remoteTimer != .picked, run == nil, runningElsewhereStep == nil, let link else { return }
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
         // the mode changes, so wait for it to report the new state before reading the limit.
         try await Task.sleep(nanoseconds: 600_000_000)
         for _ in 0..<20 {
             if let status, status.isRunning, status.maxRuntimeMinutes > 0, mode == nil || status.mode == mode {
-                if status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60 {
+                if case .until(let end) = remoteTimer, remoteTimer.isAhead {
+                    let minutes = minutes(until: end, limit: status.maxRuntimeMinutes)
+                    if abs(status.remainingSeconds - minutes * 60) > 60 { try await link.setRuntime(minutes: minutes) }
+                } else if status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60 {
                     try await link.setRuntime(minutes: status.maxRuntimeMinutes)
                 }
                 return
@@ -570,11 +601,30 @@ final class BedJet: Identifiable {
         return modes
     }
 
-    /// Why a schedule can't run on this BedJet, if it can't.
-    func problem(running schedule: Schedule) -> String? {
+    /// Why a schedule can't run on this BedJet when started at `date`, if it can't.
+    func problem(running schedule: Schedule, at date: Date = Date()) -> String? {
         let modes = unsupportedModes(in: schedule)
-        guard !modes.isEmpty else { return nil }
-        let names = ListFormatter.localizedString(byJoining: modes.map(\.title))
-        return "\(displayName) is a BedJet V2, which can't run \(names). Edit “\(schedule.name)” or pick another schedule for it."
+        if !modes.isEmpty {
+            let names = ListFormatter.localizedString(byJoining: modes.map(\.title))
+            return "\(displayName) is a BedJet V2, which can't run \(names). Edit “\(schedule.name)” or pick another schedule for it."
+        }
+        // Started then, the last phase has to reach the wake time within what BedJet lets it run.
+        return schedule.wakeProblem(startingAt: Format.minuteOfDay(date))
+    }
+}
+
+/// How air started from the Remote is timed.
+enum RemoteTimer: Equatable {
+    /// As long as the BedJet allows, which depends on the mode, temperature and fan.
+    case longest
+    /// For a duration picked on the Remote.
+    case picked
+    /// Until a time picked on the Remote, as far as the mode allows.
+    case until(Date)
+
+    /// A time picked on the Remote that hasn't come yet.
+    var isAhead: Bool {
+        if case .until(let end) = self { return end > Date() }
+        return false
     }
 }

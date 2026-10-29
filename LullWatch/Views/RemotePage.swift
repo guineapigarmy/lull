@@ -9,6 +9,8 @@ struct RemotePage: View {
     @State private var temperature = Mode.cool.defaultTemperature
     @State private var fan = 40
     @State private var minutes = 30
+    /// When the air turns off, as a minute of the day, while the page shows it as a time.
+    @State private var endMinute = 0
     @FocusState private var focused: RemoteSetting?
 
     var body: some View {
@@ -44,13 +46,25 @@ struct RemotePage: View {
                 CrownRow(title: "Fan", valueText: "\(fan)%", value: Binding { Double(fan) } set: { fan = Int($0) },
                          range: 5...100, step: 5, tint: mode.tint, focus: $focused, setting: .fan)
             }
+            timerChoice
             let limit = runtimeLimit
-            CrownRow(title: "Turns off in", valueText: Format.duration(minutes), spokenValue: Format.spokenDuration(minutes),
-                     value: Binding { Double(minutes) } set: { minutes = Int($0) }, range: limit.range, step: limit.step,
-                     focus: $focused, setting: .time)
+            if model.remoteShowsTime {
+                // The crown moves the end a step at a time: 6:30, 6:45.
+                CrownRow(title: "Turns off at", valueText: Format.clock(endMinute),
+                         value: Binding { Double(Format.minutes(until: endMinute, from: Date())) } set: { setEnd(minutes: Int($0)) },
+                         range: limit.range, step: limit.step, focus: $focused, setting: .time)
+            } else {
+                CrownRow(title: "Turns off in", valueText: Format.duration(minutes), spokenValue: Format.spokenDuration(minutes),
+                         value: Binding { Double(minutes) } set: { minutes = Int($0) }, range: limit.range, step: limit.step,
+                         focus: $focused, setting: .time)
+            }
         }
-        let preset = RemotePreset(mode: mode, minutes: minutes, temperature: temperature, fanPercent: fan).clamped
-        ErrandButton(title: mode == .standby ? "Turn Off" : "Apply", busyTitle: "Sending…", command: .remote(preset, bedJet.id))
+        // Redrawn each minute, so a time is sent as the minutes left until it when Apply is pressed.
+        TimelineView(.everyMinute) { _ in
+            let runs = model.remoteShowsTime && mode != .standby ? Format.minutes(until: endMinute, from: Date()) : minutes
+            let preset = RemotePreset(mode: mode, minutes: runs, temperature: temperature, fanPercent: fan).clamped
+            ErrandButton(title: mode == .standby ? "Turn Off" : "Apply", busyTitle: "Sending…", command: .remote(preset, bedJet.id))
+        }
         if case .night? = bedJet.live(at: Date()) {
             Footnote(text: "Choosing a mode here ends the schedule that's running.")
         }
@@ -74,12 +88,48 @@ struct RemotePage: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// Timer or Time: whether the row below sets how long the air runs or when it turns off. Remembered on the watch.
+    private var timerChoice: some View {
+        HStack(spacing: 6) {
+            ForEach([false, true], id: \.self) { showsTime in
+                let isSelected = model.remoteShowsTime == showsTime
+                Button {
+                    guard !isSelected else { return }
+                    if showsTime { setEnd(minutes: minutes) } else { minutes = clamped(Format.minutes(until: endMinute, from: Date())) }
+                    model.remoteShowsTime = showsTime
+                } label: {
+                    Text(showsTime ? "Time" : "Timer")
+                        .scaledFont(13, .semibold)
+                        .foregroundStyle(isSelected ? Color.black : Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(isSelected ? Color.white : Theme.raised, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+    }
+
     private func choose(_ option: Mode) {
         guard option != mode else { return }
         mode = option
         temperature = option.defaultTemperature
+        minutes = clamped(minutes)
+        if model.remoteShowsTime { setEnd(minutes: Format.minutes(until: endMinute, from: Date())) }
+    }
+
+    /// Within what the mode allows at this temperature and fan.
+    private func clamped(_ minutes: Int) -> Int {
         let limit = runtimeLimit
-        minutes = min(max(minutes, Int(limit.range.lowerBound)), Int(limit.range.upperBound))
+        return min(max(minutes, Int(limit.range.lowerBound)), Int(limit.range.upperBound))
+    }
+
+    /// Turns off about `minutes` from now, on the row's step, within what the mode allows.
+    private func setEnd(minutes: Int) {
+        let step = Int(runtimeLimit.step), now = Date()
+        var lasting = Format.minutesEndingOnStep(clamped(minutes), step: step, from: now)
+        if lasting > Int(runtimeLimit.range.upperBound) { lasting -= step }
+        endMinute = (Format.minuteOfDay(now) + lasting) % 1440
     }
 
     /// What the BedJet is doing from the Remote, or the Quick Remote's first button: Cool for 30 minutes.
@@ -90,12 +140,14 @@ struct RemotePage: View {
             fan = liveFan
             let step = Int(runtimeLimit.step)
             minutes = max(Int(endsAt.timeIntervalSinceNow / 60) / step * step, step)
+            endMinute = Format.endMinute(after: Int(endsAt.timeIntervalSinceNow), from: Date())
         } else {
             let first = PresetChoice.defaults[0].preset(fahrenheit: model.snapshot.useFahrenheit)
             mode = first.mode
             temperature = first.temperature
             fan = first.fanPercent
             minutes = first.minutes
+            setEnd(minutes: minutes)
         }
     }
 

@@ -1,6 +1,23 @@
 package com.rohankanjani.lull.wear.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import kotlinx.coroutines.delay
+import com.rohankanjani.lull.ui.Theme
+import androidx.wear.compose.material3.Text
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,12 +70,34 @@ private fun Controls(model: WatchModel, bedJet: WidgetBedJet) {
     var temperature by remember { mutableIntStateOf(Mode.COOL.defaultTemperature) }
     var fan by remember { mutableIntStateOf(40) }
     var minutes by remember { mutableIntStateOf(30) }
+    /** When the air turns off, as a minute of the day, while the page shows it as a time. */
+    var endMinute by remember { mutableIntStateOf(0) }
+    /** Moves on each minute, so a time is sent as the minutes left until it when Apply is pressed. */
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000 - System.currentTimeMillis() % 60_000)
+            now = System.currentTimeMillis()
+        }
+    }
 
     /** How long the mode may run at this temperature and fan, with a step that suits the span, as on the phone. */
     fun runtimeLimit(): Pair<IntRange, Int> {
         val longest = Phase(mode, temperature, fan, 1).maxMinutes
         val step = if (longest <= 15) 1 else if (longest <= 240) 5 else 15
         return step..maxOf(longest / step * step, step * 2) to step
+    }
+
+    /** Within what the mode allows at this temperature and fan. */
+    fun clamped(value: Int): Int = runtimeLimit().first.let { value.coerceIn(it.first, it.last) }
+
+    /** Turns off about [lasting] minutes from now, on the row's step, within what the mode allows. */
+    fun setEnd(lasting: Int) {
+        val (range, step) = runtimeLimit()
+        val time = System.currentTimeMillis()
+        var length = Format.minutesEndingOnStep(clamped(lasting), step, time)
+        if (length > range.last) length -= step
+        endMinute = (Format.minuteOfDay(time) + length) % 1440
     }
 
     // Starts from what the BedJet is doing, and again for another BedJet: air from the Remote, or the Quick Remote's
@@ -70,12 +110,14 @@ private fun Controls(model: WatchModel, bedJet: WidgetBedJet) {
             fan = air.fanPercent
             val step = runtimeLimit().second
             minutes = maxOf(((air.endsAt - System.currentTimeMillis()) / 60_000L).toInt() / step * step, step)
+            endMinute = Format.endMinute(((air.endsAt - System.currentTimeMillis()) / 1000L).toInt(), System.currentTimeMillis())
         } else {
             val first = PresetChoice.defaults[0].preset(fahrenheit)
             mode = first.mode
             temperature = first.temperature
             fan = first.fanPercent
             minutes = first.minutes
+            setEnd(minutes)
         }
     }
 
@@ -87,8 +129,8 @@ private fun Controls(model: WatchModel, bedJet: WidgetBedJet) {
                     if (option != mode) {
                         mode = option
                         temperature = option.defaultTemperature
-                        val (range, _) = runtimeLimit()
-                        minutes = minutes.coerceIn(range.first, range.last)
+                        minutes = clamped(minutes)
+                        if (model.remoteShowsTime) setEnd(Format.minutes(endMinute, System.currentTimeMillis()))
                     }
                 }
             }
@@ -112,12 +154,44 @@ private fun Controls(model: WatchModel, bedJet: WidgetBedJet) {
         if (mode.usesFan) {
             CrownRow("Fan", "$fan%", fan, { fan = it }, 5..100, step = 5, tint = mode.tint)
         }
+        TimerChoice(model.remoteShowsTime) { showsTime ->
+            if (showsTime) setEnd(minutes) else minutes = clamped(Format.minutes(endMinute, System.currentTimeMillis()))
+            model.remoteShowsTime = showsTime
+        }
         val (range, step) = runtimeLimit()
-        CrownRow("Turns off in", Format.duration(minutes), minutes, { minutes = it }, range, step, spokenValue = Format.spokenDuration(minutes))
+        if (model.remoteShowsTime) {
+            // The bezel moves the end a step at a time: 6:30, 6:45.
+            CrownRow("Turns off at", Format.clock(endMinute), Format.minutes(endMinute, now), { setEnd(it) }, range, step)
+        } else {
+            CrownRow("Turns off in", Format.duration(minutes), minutes, { minutes = it }, range, step, spokenValue = Format.spokenDuration(minutes))
+        }
     }
-    val preset = RemotePreset(mode, minutes, temperature, fan).clamped
+    val runs = if (model.remoteShowsTime && mode != Mode.STANDBY) Format.minutes(endMinute, now) else minutes
+    val preset = RemotePreset(mode, runs, temperature, fan).clamped
     ErrandButton(model, if (mode == Mode.STANDBY) "Turn Off" else "Apply", "Sending…", WatchCommand.Remote(preset, bedJet.id))
     if (bedJet.live(System.currentTimeMillis()) is LiveStatus.Night) {
         Footnote("Choosing a mode here ends the schedule that's running.")
+    }
+}
+
+/** Timer or Time: whether the row below sets how long the air runs or when it turns off. Remembered on the watch. */
+@Composable
+private fun TimerChoice(showsTime: Boolean, onChoose: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (option in listOf(false, true)) {
+            val isSelected = option == showsTime
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) Color.White else Theme.raised)
+                    .clickable(role = Role.Button) { if (!isSelected) onChoose(option) }
+                    .semantics(mergeDescendants = true) { selected = isSelected; role = Role.Button },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (option) "Time" else "Timer", color = if (isSelected) Color.Black else Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }

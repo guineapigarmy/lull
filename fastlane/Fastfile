@@ -203,3 +203,6 @@ platform :android do
     end
   end
 end
+
+# TestFlight builds for a fork, under your own Apple Developer team.
+import "TestflightFastfile"

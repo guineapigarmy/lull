@@ -69,6 +69,9 @@ struct DeviceSheet: View {
                     }
                 }
 
+                // A BedJet V2's firmware can't be updated from a phone.
+                if bedJet.knownGeneration == .v3 { FirmwareSection() }
+
                 if !model.hasSeveralBedJets {
                     Section {
                         NavigationLink { NearbyBedJets() } label: { Label("Add Another BedJet", systemImage: "plus") }
@@ -127,6 +130,113 @@ struct DeviceSheet: View {
         case .bluetoothOff: return "Turn on Bluetooth in Control Center to connect."
         case .unauthorized: return "Allow Bluetooth for Lull in Settings to connect."
         }
+    }
+}
+
+/// A BedJet 3 downloads its own firmware over Wi-Fi. Lull gives it a network and asks it to check.
+private struct FirmwareSection: View {
+    @Environment(BedJet.self) private var bedJet
+    @State private var confirming = false
+
+    var body: some View {
+        Section {
+            if bedJet.updateAvailable {
+                Label("Your BedJet says newer firmware is available.", systemImage: "arrow.down.circle")
+            }
+            Button("Check for Update") { confirming = true }
+                .disabled(!bedJet.canUpdateFirmware)
+            if let activity = bedJet.wifiActivity, activity.purpose == .updating { WiFiActivityRow(activity: activity) }
+            NavigationLink { WiFiSetup() } label: { Label("Wi-Fi Network", systemImage: "wifi") }
+        } header: {
+            Text("Firmware")
+        } footer: {
+            if bedJet.updateWaitsForSchedule {
+                Text("A schedule is running. Check once it has finished, since updating restarts your BedJet.")
+            } else if !bedJet.isConnected {
+                Text("Lull checks for updates and sets up Wi-Fi while it's connected to your BedJet.")
+            } else {
+                Text("Your BedJet downloads updates itself, over Wi-Fi. If there's a newer version, it installs it straight away and restarts, which turns off the air.")
+            }
+        }
+        .alert("Check for a firmware update?", isPresented: $confirming) {
+            Button("Cancel", role: .cancel) {}
+            Button("Check") { Task { await bedJet.updateFirmware() } }
+        } message: {
+            Text("If there's a newer version, your BedJet installs it straight away and restarts, which turns off the air. Keep it plugged in until it's back.")
+        }
+    }
+}
+
+/// What the BedJet is doing with its Wi-Fi, or how it went.
+private struct WiFiActivityRow: View {
+    let activity: WiFiActivity
+
+    var body: some View {
+        if let outcome = activity.outcome {
+            Label {
+                Text(outcome)
+            } icon: {
+                Image(systemName: activity.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(activity.failed ? Theme.warm : .green)
+            }
+        } else {
+            HStack(spacing: 12) {
+                ProgressView()
+                Text(activity.step).foregroundStyle(Theme.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+/// Gives a BedJet 3 the Wi-Fi network it fetches firmware over. Nothing typed here is kept.
+struct WiFiSetup: View {
+    @Environment(BedJet.self) private var bedJet
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var network = ""
+    @State private var password = ""
+    @FocusState private var typingPassword: Bool
+
+    var body: some View {
+        let problem = Codec.wifiProblem(network: network, password: password)
+        Form {
+            Section {
+                LabeledContent("Network") {
+                    TextField("Network", text: $network, prompt: typeSize.isAccessibilitySize ? nil : Text("Name"))
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.next)
+                        .onSubmit { typingPassword = true }
+                }
+                // Shown as typed, to check a long Wi-Fi password, and so the phone doesn't offer to save it for Lull.
+                LabeledContent("Password") {
+                    TextField("Password", text: $password)
+                        .focused($typingPassword)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                }
+            } footer: {
+                Text("BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”. Lull hands the name and password to your BedJet and doesn't keep them.")
+            }
+
+            Section {
+                Button("Join Network") { Task { await bedJet.joinWiFi(network: network, password: password) } }
+                    .disabled(!bedJet.canJoinWiFi || problem != nil)
+                if let activity = bedJet.wifiActivity, activity.purpose == .joining { WiFiActivityRow(activity: activity) }
+            } footer: {
+                if let problem, !network.isEmpty || !password.isEmpty {
+                    Text(problem)
+                } else {
+                    Text("Your BedJet tries the network straight away and says how it went.")
+                }
+            }
+        }
+        .tint(.green)
+        .navigationTitle("Wi-Fi")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

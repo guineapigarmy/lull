@@ -16,6 +16,7 @@ class DemoLink(
     slots: List<StoredProgram?> = listOf(null, null, null),
     /** Where the one-second clock runs. The app passes its main scope. */
     private val scope: CoroutineScope? = null,
+    wifiNetwork: String? = null,
 ) : BedJetLink {
     override var state: LinkState = LinkState.SEARCHING
         private set(value) {
@@ -34,6 +35,9 @@ class DemoLink(
         private set
     /** When the clock was set, so it can keep time from there. */
     private var clockSetAt = System.currentTimeMillis()
+    /** The Wi-Fi network the unit was given, which it needs to check for firmware. */
+    var wifiNetwork: String? = wifiNetwork
+        private set
     override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) status else null
     /** The step of the program running on the unit, connected or not; 0 when none is. */
     val programStep: Int get() = status.extra?.programStep ?: 0
@@ -52,6 +56,8 @@ class DemoLink(
 
     private var running: Run? = null
     private val pendingSteps = mutableMapOf<Int, List<ProgramStep>>()
+    /** The Wi-Fi phases still to report, one a second, like a unit joining a network or checking for firmware. */
+    private var wifiSteps = ArrayDeque<Int>()
     private var timer: Job? = null
 
     override fun start() {
@@ -93,6 +99,14 @@ class DemoLink(
             bytes[0] == 0x40 -> store(command)
         }
         onStatus?.invoke(status)
+    }
+
+    /** Pretends the network works whatever the password, then reports its firmware as current when asked to check. */
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) {
+        wifiNetwork = network.decodeToString()
+        wifiSteps = ArrayDeque(
+            listOf(Codec.WiFiPhase.STARTING, Codec.WiFiPhase.JOINING, Codec.WiFiPhase.JOINED, Codec.WiFiPhase.TESTING, Codec.WiFiPhase.WORKS),
+        )
     }
 
     override suspend fun query(request: Int): ByteArray = when (request) {
@@ -139,6 +153,13 @@ class DemoLink(
             0x46, 0x47 -> status = status.copy(extra = status.extra?.copy(ledEnabled = button == 0x46))
             0x48, 0x49 -> status = status.copy(extra = status.extra?.copy(beepsMuted = button == 0x48))
             0x52 -> setNotification(0)
+            0x43 -> wifiSteps = ArrayDeque(
+                if (wifiNetwork == null) {
+                    listOf(Codec.WiFiPhase.STARTING, Codec.WiFiPhase.NO_NETWORK)
+                } else {
+                    listOf(Codec.WiFiPhase.STARTING, Codec.WiFiPhase.JOINING, Codec.WiFiPhase.JOINED, Codec.WiFiPhase.CHECKING, Codec.WiFiPhase.UP_TO_DATE)
+                },
+            )
             in 0x80..0x82 -> {
                 val slot = button - 0x80
                 val program = slots[slot] ?: return
@@ -254,6 +275,7 @@ class DemoLink(
 
     private fun tick() {
         if (state == LinkState.CONNECTING) state = LinkState.READY
+        wifiSteps.removeFirstOrNull()?.let { phase -> status = status.copy(extra = status.extra?.copy(wifiPhase = phase)) }
         running?.let { if (System.currentTimeMillis() >= it.stepEnds) advanceProgram(it.stepEnds) }
         if (status.mode != Mode.STANDBY && status.mode != Mode.WAIT) {
             status = status.copy(remainingSeconds = maxOf(0, status.remainingSeconds - 1))

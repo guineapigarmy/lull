@@ -409,4 +409,37 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved on the BedJet"].waitForExistence(timeout: 5) || app.staticTexts["SAVED ON THE BEDJET"].waitForExistence(timeout: 2))
         capture("device")
     }
+
+    func testWiFiAndFirmwareCheck() {
+        XCTAssertTrue(app.buttons["Heat"].waitForExistence(timeout: 10))
+        sleep(2)
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
+        // The sheet's list only makes rows as they scroll into view.
+        let wifi = app.buttons["Wi-Fi Network"]
+        XCTAssertTrue(app.staticTexts["Kind, BedJet 3"].waitForExistence(timeout: 10))
+        for _ in 0..<8 where !(wifi.exists && wifi.isHittable) { app.swipeUp() }
+        wifi.tap()
+
+        // The simulated BedJet joins any network, testing it one step a second.
+        let network = app.textFields["Network"]
+        XCTAssertTrue(network.waitForExistence(timeout: 5))
+        network.tap()
+        network.typeText("Home")
+        let password = app.textFields["Password"]
+        password.tap()
+        password.typeText("12345678\n")
+        app.buttons["Join Network"].tap()
+        XCTAssertTrue(app.staticTexts["Your BedJet joined “Home” and can now check for firmware updates."].waitForExistence(timeout: 15))
+        capture("wifi")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let check = app.buttons["Check for Update"]
+        for _ in 0..<8 where !(check.exists && check.isHittable) { app.swipeUp() }
+        check.tap()
+        XCTAssertTrue(app.alerts.buttons["Check"].waitForExistence(timeout: 5))
+        capture("firmware-confirm")
+        app.alerts.buttons["Check"].tap()
+        XCTAssertTrue(app.staticTexts["Your BedJet's firmware is up to date."].waitForExistence(timeout: 15))
+        capture("firmware")
+    }
 }

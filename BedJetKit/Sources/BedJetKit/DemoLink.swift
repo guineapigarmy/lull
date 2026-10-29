@@ -19,6 +19,8 @@ public final class DemoLink: BedJetLink {
     public private(set) var clock: (hour: Int, minute: Int)?
     /// When the clock was set, so it can keep time from there.
     private var clockSetAt = Date()
+    /// The Wi-Fi network the unit was given, which it needs to check for firmware.
+    public private(set) var wifiNetwork: String?
     public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
     /// The step of the program running on the unit, connected or not; 0 when none is.
     public var programStep: Int { status.extra?.programStep ?? 0 }
@@ -30,11 +32,14 @@ public final class DemoLink: BedJetLink {
     )
     private var running: (slot: Int, step: Int, stepEnds: Date)?
     private var pendingSteps: [Int: [ProgramStep]] = [:]
+    /// The Wi-Fi phases still to report, one a second, like a unit joining a network or checking for firmware.
+    private var wifiSteps: [Int] = []
     private var timer: Timer?
 
-    public init(name: String = DemoLink.defaultName, slots: [StoredProgram?] = [nil, nil, nil]) {
+    public init(name: String = DemoLink.defaultName, slots: [StoredProgram?] = [nil, nil, nil], wifiNetwork: String? = nil) {
         self.name = name
         self.slots = slots
+        self.wifiNetwork = wifiNetwork
     }
 
     public func start() {
@@ -71,6 +76,12 @@ public final class DemoLink: BedJetLink {
         default: break
         }
         onStatus?(status)
+    }
+
+    /// Pretends the network works whatever the password, then reports its firmware as current when asked to check.
+    public func writeWiFi(network: Data, password: Data) async throws {
+        wifiNetwork = String(decoding: network, as: UTF8.self)
+        wifiSteps = [Codec.WiFiPhase.starting, Codec.WiFiPhase.joining, Codec.WiFiPhase.joined, Codec.WiFiPhase.testing, Codec.WiFiPhase.works]
     }
 
     public func query(_ request: UInt8) async throws -> Data {
@@ -113,6 +124,10 @@ public final class DemoLink: BedJetLink {
         case 0x46, 0x47: status.extra?.ledEnabled = button == 0x46
         case 0x48, 0x49: status.extra?.beepsMuted = button == 0x48
         case 0x52: status.extra?.notification = 0
+        case 0x43:
+            wifiSteps = wifiNetwork == nil
+                ? [Codec.WiFiPhase.starting, Codec.WiFiPhase.noNetwork]
+                : [Codec.WiFiPhase.starting, Codec.WiFiPhase.joining, Codec.WiFiPhase.joined, Codec.WiFiPhase.checking, Codec.WiFiPhase.upToDate]
         case 0x80...0x82:
             let slot = Int(button - 0x80)
             guard let program = slots[slot] else { return }
@@ -219,6 +234,7 @@ public final class DemoLink: BedJetLink {
 
     private func tick() {
         if state == .connecting { state = .ready }
+        if !wifiSteps.isEmpty { status.extra?.wifiPhase = wifiSteps.removeFirst() }
         if let run = running, Date() >= run.stepEnds { advanceProgram(from: run.stepEnds) }
         if status.mode != .standby, status.mode != .wait {
             status.remainingSeconds = max(0, status.remainingSeconds - 1)

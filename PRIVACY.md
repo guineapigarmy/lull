@@ -1,6 +1,6 @@
 # Lull privacy policy
 
-_Last updated: October 27, 2026_
+_Last updated: October 29, 2026_
 
 Lull is a Bluetooth remote and scheduler for the BedJet 3 and BedJet V2, made by Rohan Kanjani. It is available for
 iPhone and Android, with watch apps for Apple Watch and Wear OS.
@@ -33,6 +33,13 @@ names, tonight's schedule, what each BedJet is doing and the last two days of hi
 your phone and your watch, over Watch Connectivity on Apple devices and the Wearable Data Layer's messages on
 Android, and is kept on the watch for its app, tile and complications. To do an errand while it's closed, Lull may
 briefly connect to your BedJet in the background, and lets go as soon as it's done.
+
+## Wi-Fi and firmware updates
+
+A BedJet 3 downloads firmware updates itself, from BedJet's servers, over your Wi-Fi. If you set up
+Wi-Fi for it in Lull, the network name and password you type are sent to the BedJet over Bluetooth.
+Lull doesn't keep them, and they go nowhere else. When you check for an update, Lull asks the BedJet to
+contact BedJet's servers; Lull itself still makes no network requests.
 
 ## Children
 

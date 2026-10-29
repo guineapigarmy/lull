@@ -20,6 +20,8 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(status.extra?.beepsMuted, true)
         XCTAssertEqual(status.lastShutdownReason, 0)
         XCTAssertEqual(status.extra?.notification, Codec.Notification.cleanFilter)
+        // The result of an earlier connection test, kept until the unit next uses its Wi-Fi.
+        XCTAssertEqual(status.extra?.wifiPhase, Codec.WiFiPhase.cannotJoin)
     }
 
     func testFirstChunkAloneStillParses() throws {
@@ -194,4 +196,119 @@ final class CodecTests: XCTestCase {
         try await link.send(Codec.acknowledgeNotification)
         XCTAssertEqual(latest?.extra?.notification, 0)
     }
+
+    // MARK: Wi-Fi and firmware
+
+    /// `MAGIC_UPDATE` in the official app.
+    func testCheckingForFirmwareIsTheOfficialAppsButton() {
+        XCTAssertEqual(Codec.updateFirmware, Data([0x01, 0x43]))
+    }
+
+    func testWiFiDetailsMustSuitTheUnit() {
+        XCTAssertNil(Codec.wifiProblem(network: "Home", password: "12345678"))
+        XCTAssertNotNil(Codec.wifiProblem(network: "", password: "12345678"))
+        XCTAssertNotNil(Codec.wifiProblem(network: String(repeating: "n", count: 33), password: "12345678"))
+        XCTAssertNotNil(Codec.wifiProblem(network: "Home", password: "1234567"))
+        XCTAssertNotNil(Codec.wifiProblem(network: "Home", password: String(repeating: "p", count: 64)))
+    }
+
+    @MainActor
+    func testJoiningWiFiSendsTheNameThenPasswordAndFollowsTheTest() async throws {
+        let link = ScriptedWiFiLink([21, 1, 2, 3, 4, 24])
+        var steps: [Int] = []
+        try await link.joinWiFi(network: "Home", password: "correct horse") { steps.append($0) }
+        XCTAssertEqual(link.wifi?.network, Data("Home".utf8))
+        XCTAssertEqual(link.wifi?.password, Data("correct horse".utf8))
+        XCTAssertEqual(steps, [1, 2, 3, 4])
+    }
+
+    @MainActor
+    func testAFailedJoinCountsEvenWhenItRepeatsTheLastResult() async {
+        let link = ScriptedWiFiLink([21, 21, 1, 2, 21])
+        do {
+            try await link.joinWiFi(network: "Home", password: "wrong password")
+            XCTFail("joined")
+        } catch {
+            XCTAssertEqual(error as? BedJetError, .wifi(Codec.WiFiPhase.cannotJoin))
+        }
+    }
+
+    @MainActor
+    func testAFailureThatComesAndGoesUnseenIsStillReported() async {
+        // The unit tried and failed again between two reports, so all that's seen is the same failure.
+        let link = ScriptedWiFiLink([21])
+        do {
+            try await link.joinWiFi(network: "Home", password: "wrong password")
+            XCTFail("joined")
+        } catch {
+            XCTAssertEqual(error as? BedJetError, .wifi(Codec.WiFiPhase.cannotJoin))
+        }
+    }
+
+    @MainActor
+    func testAFirmwareCheckFindsItUpToDate() async throws {
+        let link = ScriptedWiFiLink([21, 1, 2, 3, 5, 26])
+        let found = try await link.updateFirmware()
+        XCTAssertEqual(link.sent, [Codec.updateFirmware])
+        XCTAssertEqual(found, .upToDate)
+    }
+
+    @MainActor
+    func testAFirmwareCheckWaitsPastTheResultLeftFromBefore() async throws {
+        // Up to date from an earlier check; this one finds newer firmware and restarts into it, dropping the link.
+        let link = ScriptedWiFiLink([26, 26, 1, 5, 6, 7, nil])
+        let found = try await link.updateFirmware()
+        XCTAssertEqual(found, .installing)
+    }
+
+    @MainActor
+    func testSimulatedBedJetNeedsWiFiToCheckForFirmware() async throws {
+        let link = DemoLink()
+        link.start()
+        defer { link.stop() }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        do {
+            _ = try await link.updateFirmware()
+            XCTFail("checked without Wi-Fi")
+        } catch {
+            XCTAssertEqual(error as? BedJetError, .wifi(Codec.WiFiPhase.noNetwork))
+        }
+        try await link.joinWiFi(network: "Home", password: "12345678")
+        XCTAssertEqual(link.wifiNetwork, "Home")
+        let found = try await link.updateFirmware()
+        XCTAssertEqual(found, .upToDate)
+    }
+}
+
+/// Reports the next of `phases` each time its status is read, as a BedJet 3 does over successive reports.
+/// A nil phase drops the connection, as the unit does when it restarts.
+@MainActor
+private final class ScriptedWiFiLink: BedJetLink {
+    private(set) var state: LinkState = .ready
+    var onStateChange: ((LinkState) -> Void)?
+    var onStatus: ((DeviceStatus) -> Void)?
+    private(set) var sent: [Data] = []
+    private(set) var wifi: (network: Data, password: Data)?
+    private var phases: [Int?]
+
+    init(_ phases: [Int?]) { self.phases = phases }
+
+    var lastStatus: DeviceStatus? {
+        let phase = phases.count > 1 ? phases.removeFirst() : phases.first ?? nil
+        guard let phase else {
+            state = .searching
+            return nil
+        }
+        return DeviceStatus(
+            remainingSeconds: 0, actualTemperature: 40, targetTemperature: 60, mode: .standby, fanStep: 7,
+            maxRuntimeMinutes: 0, minTemperature: 38, maxTemperature: 80, ambientTemperature: 40, lastShutdownReason: 0,
+            extra: .init(ledEnabled: true, beepsMuted: false, programStep: 0, notification: 0, wifiPhase: phase)
+        )
+    }
+
+    func start() {}
+    func stop() {}
+    func send(_ command: Data) async throws { sent.append(command) }
+    func query(_ request: UInt8) async throws -> Data { throw BedJetError.badResponse }
+    func writeWiFi(network: Data, password: Data) async throws { wifi = (network, password) }
 }

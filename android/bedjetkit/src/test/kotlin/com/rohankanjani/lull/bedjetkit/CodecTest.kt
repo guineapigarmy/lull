@@ -32,6 +32,8 @@ class CodecTest {
         assertEquals(true, status.extra?.beepsMuted)
         assertEquals(0, status.lastShutdownReason)
         assertEquals(Codec.Notification.CLEAN_FILTER, status.extra?.notification)
+        // The result of an earlier connection test, kept until the unit next uses its Wi-Fi.
+        assertEquals(Codec.WiFiPhase.CANNOT_JOIN, status.extra?.wifiPhase)
     }
 
     @Test
@@ -224,4 +226,121 @@ class CodecTest {
         link.send(Codec.acknowledgeNotification)
         assertEquals(0, latest?.extra?.notification)
     }
+
+    // Wi-Fi and firmware
+
+    /** `MAGIC_UPDATE` in the official app. */
+    @Test
+    fun checkingForFirmwareIsTheOfficialAppsButton() {
+        assertArrayEquals(byteArrayOf(0x01, 0x43), Codec.updateFirmware)
+    }
+
+    @Test
+    fun wifiDetailsMustSuitTheUnit() {
+        assertNull(Codec.wifiProblem("Home", "12345678"))
+        assertNotNull(Codec.wifiProblem("", "12345678"))
+        assertNotNull(Codec.wifiProblem("n".repeat(33), "12345678"))
+        assertNotNull(Codec.wifiProblem("Home", "1234567"))
+        assertNotNull(Codec.wifiProblem("Home", "p".repeat(64)))
+    }
+
+    @Test
+    fun joiningWiFiSendsTheNameThenPasswordAndFollowsTheTest() = runTest {
+        val link = ScriptedWiFiLink(21, 1, 2, 3, 4, 24)
+        val steps = mutableListOf<Int>()
+        link.joinWiFi("Home", "correct horse") { steps += it }
+        assertArrayEquals("Home".encodeToByteArray(), link.wifi?.first)
+        assertArrayEquals("correct horse".encodeToByteArray(), link.wifi?.second)
+        assertEquals(listOf(1, 2, 3, 4), steps)
+    }
+
+    @Test
+    fun aFailedJoinCountsEvenWhenItRepeatsTheLastResult() = runTest {
+        val link = ScriptedWiFiLink(21, 21, 1, 2, 21)
+        try {
+            link.joinWiFi("Home", "wrong password")
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.CANNOT_JOIN), error)
+        }
+    }
+
+    @Test
+    fun aFailureThatComesAndGoesUnseenIsStillReported() = runTest {
+        // The unit tried and failed again between two reports, so all that's seen is the same failure.
+        val link = ScriptedWiFiLink(21)
+        try {
+            link.joinWiFi("Home", "wrong password")
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.CANNOT_JOIN), error)
+        }
+    }
+
+    @Test
+    fun aFirmwareCheckFindsItUpToDate() = runTest {
+        val link = ScriptedWiFiLink(21, 1, 2, 3, 5, 26)
+        val found = link.updateFirmware()
+        assertEquals(listOf(Codec.updateFirmware.toList()), link.sent.map { it.toList() })
+        assertEquals(FirmwareUpdate.UP_TO_DATE, found)
+    }
+
+    @Test
+    fun aFirmwareCheckWaitsPastTheResultLeftFromBefore() = runTest {
+        // Up to date from an earlier check; this one finds newer firmware and restarts into it, dropping the link.
+        val link = ScriptedWiFiLink(26, 26, 1, 5, 6, 7, null)
+        assertEquals(FirmwareUpdate.INSTALLING, link.updateFirmware())
+    }
+
+    @Test
+    fun simulatedBedJetNeedsWiFiToCheckForFirmware() = runTest {
+        val link = DemoLink(scope = backgroundScope)
+        link.start()
+        testScheduler.advanceTimeBy(1_200)
+        try {
+            link.updateFirmware()
+            fail("checked without Wi-Fi")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.NO_NETWORK), error)
+        }
+        link.joinWiFi("Home", "12345678")
+        assertEquals("Home", link.wifiNetwork)
+        assertEquals(FirmwareUpdate.UP_TO_DATE, link.updateFirmware())
+        link.stop()
+    }
+}
+
+/**
+ * Reports the next of [phases] each time its status is read, as a BedJet 3 does over successive reports.
+ * A null phase drops the connection, as the unit does when it restarts.
+ */
+private class ScriptedWiFiLink(vararg phases: Int?) : BedJetLink {
+    override var state = LinkState.READY
+        private set
+    override var onStateChange: ((LinkState) -> Unit)? = null
+    override var onStatus: ((DeviceStatus) -> Unit)? = null
+    val sent = mutableListOf<ByteArray>()
+    var wifi: Pair<ByteArray, ByteArray>? = null
+        private set
+    private val phases = ArrayDeque(phases.toList())
+
+    override val lastStatus: DeviceStatus?
+        get() {
+            val phase = if (phases.size > 1) phases.removeFirst() else phases.firstOrNull()
+            if (phase == null) {
+                state = LinkState.SEARCHING
+                return null
+            }
+            return DeviceStatus(
+                remainingSeconds = 0, actualTemperature = 40, targetTemperature = 60, mode = Mode.STANDBY, fanStep = 7,
+                maxRuntimeMinutes = 0, minTemperature = 38, maxTemperature = 80, ambientTemperature = 40, lastShutdownReason = 0,
+                extra = DeviceStatus.Extra(ledEnabled = true, beepsMuted = false, programStep = 0, notification = 0, wifiPhase = phase),
+            )
+        }
+
+    override fun start() {}
+    override fun stop() {}
+    override suspend fun send(command: ByteArray) { sent += command }
+    override suspend fun query(request: Int): ByteArray = throw BedJetError.BadResponse
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) { wifi = network to password }
 }

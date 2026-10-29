@@ -16,6 +16,22 @@ struct SavedBedJet: Codable {
     var slot: Int?
 }
 
+/// A BedJet 3 using its Wi-Fi because Lull asked: to join a network, or to check for newer firmware.
+struct WiFiActivity: Equatable {
+    enum Purpose { case joining, updating }
+
+    var purpose: Purpose
+    /// What the BedJet is doing, until it's over.
+    var step = "Asking your BedJet…"
+    /// How it went, once it's over.
+    var outcome: String?
+    var failed = false
+    /// Installing new firmware, so the version is read again once the BedJet is back.
+    var awaitsRestart = false
+
+    var isRunning: Bool { outcome == nil }
+}
+
 /// One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did.
 @MainActor
 @Observable
@@ -60,6 +76,10 @@ final class BedJet: Identifiable {
     private(set) var isSavingSchedule = false { didSet { app?.publishLiveActivities() } }
     /// Set when every slot on the BedJet is taken and the user has to pick one to reuse.
     var needsSlotChoice = false
+    /// The BedJet using its Wi-Fi because Lull asked, and how that went. One at a time.
+    private(set) var wifiActivity: WiFiActivity?
+    /// Set when the BedJet says newer firmware is available, until it has been asked to check.
+    private(set) var updateAvailable = false
 
     @ObservationIgnored private weak var app: AppModel?
     private var link: BedJetLink?
@@ -78,6 +98,7 @@ final class BedJet: Identifiable {
     private var turnedOffAt: Date?
     /// How long after Off a report saying the BedJet is still running is taken to have been sent before it.
     static var staleReportWindow: TimeInterval = 2
+    private var acknowledgingUpdate = false
 
     var saved: SavedBedJet {
         SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot)
@@ -127,8 +148,8 @@ final class BedJet: Identifiable {
         deviceSlots = []
         guard let app else { return }
         let link = app.makeLink(for: self)
-        // Never hand the BedJet to another phone halfway through saving a schedule.
-        (link as? BLELink)?.canYield = { [weak self] in self?.isBusy != true }
+        // Never hand the BedJet to another phone halfway through saving a schedule, or while it uses its Wi-Fi.
+        (link as? BLELink)?.canYield = { [weak self] in self?.isBusy != true && self?.wifiActivity?.isRunning != true }
         link.onStateChange = { [weak self] state in self?.linkStateChanged(state) }
         link.onStatus = { [weak self] status in self?.statusChanged(status) }
         self.link = link
@@ -191,6 +212,8 @@ final class BedJet: Identifiable {
         guard searchTimer == nil else { return }
         searchTimer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
+            // Restarting into new firmware takes a while, and the tips would suggest unplugging it, so they wait longer.
+            if self?.wifiActivity?.awaitsRestart == true { try? await Task.sleep(for: .seconds(165)) }
             guard !Task.isCancelled else { return }
             self?.isSlowToFind = true
         }
@@ -217,6 +240,10 @@ final class BedJet: Identifiable {
                 name = try await link.deviceName()
                 app?.save()
                 firmware = try await link.firmwareVersion()
+                if wifiActivity?.awaitsRestart == true, let firmware {
+                    wifiActivity?.outcome = "Your BedJet restarted with firmware \(firmware)."
+                    wifiActivity?.awaitsRestart = false
+                }
                 try await refreshSlots()
                 lastRefresh = Date()
             } catch {
@@ -235,6 +262,7 @@ final class BedJet: Identifiable {
         observe(status)
         app?.publishLiveActivities()
         app?.publishWidgets()
+        noticeUpdate(status)
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
         let programStopped = status.mode == .standby && status.extra?.programStep == 0
@@ -461,6 +489,80 @@ final class BedJet: Identifiable {
             if link.state == .ready { return }
         }
         throw wasElsewhere ? BedJetError.inUseElsewhere : BedJetError.notConnected
+    }
+
+    // MARK: Wi-Fi and firmware
+
+    /// Updating restarts the BedJet, which would end a schedule partway through the night, or one being saved.
+    var updateWaitsForSchedule: Bool { isSavingSchedule || run != nil || runningElsewhereStep != nil }
+    var canUpdateFirmware: Bool { canJoinWiFi && !updateWaitsForSchedule }
+    var canJoinWiFi: Bool { isConnected && wifiActivity?.isRunning != true }
+
+    /// Gives the BedJet the Wi-Fi network it fetches firmware over. Lull keeps neither the name nor the password.
+    func joinWiFi(network: String, password: String) async {
+        await useWiFi(.joining) { link, progress in
+            try await link.joinWiFi(network: network, password: password, progress: progress)
+            return "Your BedJet joined “\(network)” and can now check for firmware updates."
+        }
+    }
+
+    /// Asks the BedJet to check for newer firmware, which it installs straight away.
+    func updateFirmware() async {
+        // A schedule may have started while the person was confirming.
+        guard canUpdateFirmware else { return }
+        await useWiFi(.updating) { link, progress in
+            switch try await link.updateFirmware(progress: progress) {
+            case .upToDate:
+                return "Your BedJet's firmware is up to date."
+            case .installing:
+                // Read again once it's back, to show the new version.
+                self.lastRefresh = .distantPast
+                self.wifiActivity?.awaitsRestart = true
+                return "Your BedJet is installing the update and restarts when it's done. Keep it plugged in."
+            }
+        }
+    }
+
+    private func useWiFi(_ purpose: WiFiActivity.Purpose, _ work: (BedJetLink, (Int) -> Void) async throws -> String) async {
+        guard let link, wifiActivity?.isRunning != true else { return }
+        wifiActivity = WiFiActivity(purpose: purpose)
+        do {
+            let outcome = try await work(link) { phase in
+                if let step = Self.step(phase) { self.wifiActivity?.step = step }
+            }
+            wifiActivity?.outcome = outcome
+            if purpose == .updating { updateAvailable = false }
+        } catch {
+            wifiActivity?.outcome = error.localizedDescription
+            wifiActivity?.failed = true
+            wifiActivity?.awaitsRestart = false
+        }
+    }
+
+    /// What the BedJet is doing at each step it reports while it uses its Wi-Fi.
+    private static func step(_ phase: Int) -> String? {
+        switch phase {
+        case Codec.WiFiPhase.starting: "Starting…"
+        case Codec.WiFiPhase.joining: "Joining Wi-Fi…"
+        case Codec.WiFiPhase.joined: "Connected to Wi-Fi…"
+        case Codec.WiFiPhase.testing: "Testing the connection…"
+        case Codec.WiFiPhase.checking: "Checking for an update…"
+        case Codec.WiFiPhase.updating: "Installing the update…"
+        case Codec.WiFiPhase.restarting: "Restarting your BedJet…"
+        default: nil
+        }
+    }
+
+    /// A BedJet 3 on Wi-Fi checks for firmware by itself now and then, and says when there's newer firmware until
+    /// that's acknowledged, as the official app does once it has shown it.
+    private func noticeUpdate(_ status: DeviceStatus) {
+        guard status.extra?.notification == Codec.Notification.updateAvailable, !acknowledgingUpdate, let link else { return }
+        updateAvailable = true
+        acknowledgingUpdate = true
+        Task {
+            try? await link.acknowledgeNotification()
+            acknowledgingUpdate = false
+        }
     }
 
     /// Launching with `-logConnections` keeps a record of connection times, so they can be measured on a real phone.

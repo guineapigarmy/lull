@@ -1,0 +1,159 @@
+# Builds the newest commit on main under your own Apple Developer team, uploads it to TestFlight and reports in
+# Slack. For a fork: the iPhone app only, nothing is submitted for review and the Android app isn't built.
+# Off until the TESTFLIGHT_BUNDLE_ID repository variable is set. Setup: docs/TESTFLIGHT.md.
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - screens.png
+      - screenshots/**
+      - app-store-screenshots/**
+      - android/**
+      - fastlane/metadata/**
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: Message shown in Slack for this manual run
+        default: Manual workflow run
+        required: false
+
+# One build at a time. A push made while one runs waits, and only the newest waiting push runs.
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # On a cheap runner of its own, so the message shows while the macOS runner is still starting.
+  notify-start:
+    name: Notify Slack (build started)
+    if: vars.TESTFLIGHT_BUNDLE_ID != '' && vars.SLACK_CHANNEL_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      slack-ts: ${{ steps.slack.outputs.ts }}
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+    steps:
+      # The Slack step lives in this repository: a public one can't use the private devops copy.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Post Slack message (started)
+        id: slack
+        if: env.SLACK_BOT_TOKEN != ''
+        # Slack must never block a build.
+        continue-on-error: true
+        uses: ./.github/actions/slack-status
+        with:
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel: ${{ vars.SLACK_CHANNEL_ID }}
+          color: warning
+          status: TestFlight build started
+          commit-message: ${{ inputs.commit_message }}
+          app-url: ${{ vars.APP_URL }}
+
+      - name: Warn about the missing Slack token
+        if: env.SLACK_BOT_TOKEN == ''
+        run: echo "::warning::SLACK_CHANNEL_ID is set but the SLACK_BOT_TOKEN secret is empty; skipping Slack"
+
+  testflight:
+    name: Build and upload to TestFlight
+    if: vars.TESTFLIGHT_BUNDLE_ID != ''
+    runs-on: macos-26
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.upload.outputs.version }}
+      build: ${{ steps.upload.outputs.build }}
+    env:
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      FASTLANE_SKIP_DOCS: "1"
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app
+
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Test BedJetKit
+        working-directory: BedJetKit
+        run: swift test
+
+      - name: Build and upload
+        id: upload
+        run: bundle exec fastlane ios testflight
+        env:
+          TESTFLIGHT_BUNDLE_ID: ${{ vars.TESTFLIGHT_BUNDLE_ID }}
+          TESTFLIGHT_TEAM_ID: ${{ vars.TESTFLIGHT_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+
+  notify-result:
+    name: Notify Slack (result)
+    needs: [notify-start, testflight]
+    if: always() && vars.TESTFLIGHT_BUNDLE_ID != '' && vars.SLACK_CHANNEL_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+    steps:
+      - name: Determine the outcome
+        id: outcome
+        env:
+          RESULT: ${{ needs.testflight.result }}
+          VERSION: ${{ needs.testflight.outputs.version }}
+          BUILD: ${{ needs.testflight.outputs.build }}
+        run: |
+          timestamp=$(TZ=America/Vancouver date +"%-l:%M%p PT")
+          case "$RESULT" in
+            success) status="Uploaded ${VERSION} (${BUILD}) to TestFlight at ${timestamp}"; color=good ;;
+            cancelled) status="Build cancelled at ${timestamp}"; color=danger ;;
+            *) status="Build failed at ${timestamp}"; color=danger ;;
+          esac
+          {
+            echo "status=$status"
+            echo "color=$color"
+          } >> "$GITHUB_OUTPUT"
+
+      # The Slack step lives in this repository: a public one can't use the private devops copy.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Update Slack message
+        if: env.SLACK_BOT_TOKEN != ''
+        uses: ./.github/actions/slack-status
+        with:
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel: ${{ vars.SLACK_CHANNEL_ID }}
+          # Blank when the started post failed: a new message is posted instead.
+          ts: ${{ needs.notify-start.outputs.slack-ts }}
+          color: ${{ steps.outcome.outputs.color }}
+          status: ${{ steps.outcome.outputs.status }}
+          commit-message: ${{ inputs.commit_message }}
+          app-url: ${{ vars.APP_URL }}

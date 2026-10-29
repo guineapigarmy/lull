@@ -1,0 +1,131 @@
+# Copied from guineapigarmy/devops (.github/actions/slack-status), which ig, ecobee and stocks use from there.
+# A public repository can't use an action from a private one, so this fork keeps its own copy.
+name: Slack build status
+description: Post a build status message to Slack, or update an existing one when `ts` is given
+
+inputs:
+  token:
+    description: Slack bot token (scope chat:write)
+    required: true
+  channel:
+    description: Slack channel ID
+    required: true
+  ts:
+    description: Timestamp of the message to update; blank posts a new message
+    required: false
+    default: ""
+  color:
+    description: Colour bar (good, warning, danger or a hex value)
+    required: true
+  status:
+    description: Status line
+    required: true
+  commit-message:
+    description: Overrides the pushed commit's message (manual runs)
+    required: false
+    default: ""
+  app-url:
+    description: Adds a "View application" button
+    required: false
+    default: ""
+
+outputs:
+  ts:
+    description: Timestamp of the posted or updated message
+    value: ${{ steps.post.outputs.ts }}
+
+runs:
+  using: composite
+  steps:
+    - id: post
+      shell: bash
+      env:
+        SLACK_BOT_TOKEN: ${{ inputs.token }}
+        CHANNEL: ${{ inputs.channel }}
+        TS: ${{ inputs.ts }}
+        COLOR: ${{ inputs.color }}
+        STATUS: ${{ inputs.status }}
+        APP_URL: ${{ inputs.app-url }}
+        COMMIT_MESSAGE_INPUT: ${{ inputs.commit-message }}
+        HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        HEAD_COMMIT_AUTHOR: ${{ github.event.head_commit.author.name }}
+        ACTOR: ${{ github.actor }}
+        REPOSITORY: ${{ github.repository }}
+        REF_NAME: ${{ github.ref_name }}
+        SHA: ${{ github.sha }}
+        REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        # Placeholder values (REPLACE_ME, set while a repo waits for its real
+        # Slack settings) mean "Slack not configured": warn and skip.
+        if [[ "$SLACK_BOT_TOKEN" != *xoxb-* || ! "$CHANNEL" =~ ^[CGD][A-Z0-9]+$ ]]; then
+          echo "::warning::Slack is not configured for this repo (SLACK_BOT_TOKEN or SLACK_CHANNEL_ID is unset or still a placeholder); skipping the Slack message"
+          exit 0
+        fi
+
+        # User-controlled values arrive via env (never interpolated into the
+        # script) and the payload is built by jq, so nothing needs escaping.
+        message=${COMMIT_MESSAGE_INPUT:-${HEAD_COMMIT_MESSAGE:-Manual run}}
+        author=${HEAD_COMMIT_AUTHOR:-$ACTOR}
+
+        payload=$(jq -n \
+          --arg channel "$CHANNEL" \
+          --arg ts "$TS" \
+          --arg color "$COLOR" \
+          --arg status "$STATUS" \
+          --arg repository "$REPOSITORY" \
+          --arg repository_url "$REPOSITORY_URL" \
+          --arg ref "$REF_NAME" \
+          --arg author "$author" \
+          --arg sha "$SHA" \
+          --arg message "$message" \
+          --arg run_url "$RUN_URL" \
+          --arg app_url "$APP_URL" '
+          def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+          # The hex values Slack uses for its legacy named colours (the ones the
+          # OXD deploy messages use); named colours are not reliable once an
+          # attachment carries blocks.
+          def hex: {good: "#2EB886", warning: "#DAA038", danger: "#A30200"}[.] // .;
+          def field($title; $value): {type: "mrkdwn", text: "*\($title)*\n\($value)"};
+          def button($label; $url): {type: "button", text: {type: "plain_text", text: $label}, url: $url};
+          {
+            channel: $channel,
+            attachments: [{
+              color: ($color | hex),
+              fallback: "\($repository): \($status)",
+              blocks: [
+                {
+                  type: "section",
+                  fields: ([
+                    field("Status"; $status),
+                    field("Repository"; "<\($repository_url)|\($repository)>"),
+                    field("Branch"; ($ref | esc)),
+                    field("Commit Author"; ($author | esc)),
+                    field("Commit SHA"; "<\($repository_url)/commit/\($sha)|\($sha[0:7])>"),
+                    field("Commit Message"; ($message | esc | .[0:1500]))
+                  ])
+                },
+                {
+                  type: "actions",
+                  elements: ([button("View run"; $run_url)]
+                    + (if $app_url != "" then [button("View application"; $app_url)] else [] end))
+                }
+              ]
+            }]
+          } + (if $ts != "" then {ts: $ts} else {} end)')
+
+        if [[ -n "$TS" ]]; then
+          method=chat.update
+        else
+          method=chat.postMessage
+        fi
+
+        response=$(curl -sS --fail-with-body -X POST "https://slack.com/api/$method" \
+          -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+          -H 'Content-type: application/json; charset=utf-8' \
+          --data "$payload")
+        if [[ "$(jq -r '.ok' <<< "$response")" != "true" ]]; then
+          echo "::error::Slack $method failed: $(jq -r '.error // "unknown error"' <<< "$response")"
+          exit 1
+        fi
+        echo "ts=$(jq -r '.ts' <<< "$response")" >> "$GITHUB_OUTPUT"

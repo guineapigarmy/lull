@@ -1,0 +1,90 @@
+# TestFlight builds for a fork, signed by your own Apple Developer team. Imported by the Fastfile and run by
+# .github/workflows/testflight.yml. Setup: docs/TESTFLIGHT.md.
+#
+# The project, entitlements and code carry the original team's identifiers (com.rohankanjani.lull and its App Group),
+# which only that team can sign. The lane swaps them for TESTFLIGHT_BUNDLE_ID and TESTFLIGHT_TEAM_ID in the CI
+# checkout before building, so the app itself is exactly what's on main. It lives in its own file so that syncing
+# the fork with upstream never conflicts with it.
+
+# Every file that names the original bundle identifier or team: the project, and the entitlements and code of each
+# target (the App Group is "group.<bundle identifier>").
+def files_with_identifiers
+  Dir.glob(["../#{PROJECT}/project.pbxproj", "../{Lull*,Shared}/**/*.{swift,entitlements,plist}"])
+end
+
+def use_own_identifiers(bundle_id, team_id)
+  files_with_identifiers.each do |file|
+    text = File.read(file)
+    updated = text.gsub(BUNDLE_ID, bundle_id).gsub(TEAM_ID, team_id)
+    File.write(file, updated) unless updated == text
+  end
+end
+
+platform :ios do
+  desc "Build the current commit under your own team and upload it to TestFlight (CI only)"
+  lane :testflight do
+    # Rewriting the identifiers would leave a local checkout modified, so this runs on CI's throwaway one.
+    UI.user_error!("The testflight lane rewrites the project's identifiers, so it only runs on CI") unless is_ci
+    bundle_id = ENV.fetch("TESTFLIGHT_BUNDLE_ID")
+    team_id = ENV.fetch("TESTFLIGHT_TEAM_ID")
+    use_own_identifiers(bundle_id, team_id)
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_P8")
+    )
+
+    version = build_setting("MARKETING_VERSION")
+    uploaded = latest_testflight_build_number(api_key: api_key, app_identifier: bundle_id, version: version, initial_build_number: 0)
+    build = [uploaded.to_i, build_setting("CURRENT_PROJECT_VERSION").to_i].max + 1
+
+    # From here on, the same signing and build as the App Store lane, under the swapped identifiers. SIGNED_TARGETS
+    # comes from the Fastfile, so targets added upstream (such as the watch app) are signed here too.
+    setup_ci
+    certificate = File.join(Dir.mktmpdir, "distribution.p12")
+    File.binwrite(certificate, Base64.decode64(ENV.fetch("DIST_CERT_P12_BASE64")))
+    import_certificate(
+      certificate_path: certificate,
+      certificate_password: ENV.fetch("DIST_CERT_PASSWORD"),
+      keychain_name: "fastlane_tmp_keychain",
+      keychain_password: ""
+    )
+    profiles = SIGNED_TARGETS.to_h do |target, original_id|
+      target_id = original_id.sub(BUNDLE_ID, bundle_id)
+      get_provisioning_profile(api_key: api_key, app_identifier: target_id, team_id: team_id)
+      profile = lane_context[SharedValues::SIGH_NAME]
+      update_code_signing_settings(
+        path: PROJECT,
+        targets: [target],
+        use_automatic_signing: false,
+        team_id: team_id,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile
+      )
+      [target_id, profile]
+    end
+
+    build_app(
+      project: PROJECT,
+      scheme: "Lull",
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: { provisioningProfiles: profiles },
+      # The widgets must carry the app's version, and only the app's is raised in Xcode.
+      xcargs: "CURRENT_PROJECT_VERSION=#{build} MARKETING_VERSION=#{version}",
+      output_directory: "build",
+      clean: true
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: bundle_id,
+      # Internal testers get the build once Apple has processed it, so the runner needn't wait for that.
+      skip_waiting_for_build_processing: true
+    )
+
+    # For the Slack message.
+    File.write(ENV["GITHUB_OUTPUT"], "version=#{version}\nbuild=#{build}\n", mode: "a") if ENV["GITHUB_OUTPUT"]
+  end
+end

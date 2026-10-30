@@ -38,7 +38,12 @@ final class AppModel {
     private(set) var lookingState: LinkState = .searching
     private var found: [NearbyBedJet] = []
 
-    var schedules: [Schedule] = [] { didSet { save() } }
+    var schedules: [Schedule] = [] {
+        didSet {
+            save()
+            publishShortcutSchedules()
+        }
+    }
 
     var useFahrenheit: Bool {
         didSet {
@@ -76,6 +81,8 @@ final class AppModel {
     @ObservationIgnored private var lookers = 0
     @ObservationIgnored private let liveActivities = LiveActivities()
     @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
+    /// How long an action from Shortcuts waits off screen for a BedJet that isn't answering before asking to go on in Lull.
+    @ObservationIgnored var reachPatience: TimeInterval = 10
     private var isLoaded = false
     /// The BedJets of the mode not in use, kept as they were saved.
     private var otherFleet: Fleet?
@@ -182,7 +189,7 @@ final class AppModel {
     static func code(of unit: UUID) -> String { String(unit.uuidString.prefix(4)) }
 
     func report(_ message: String, from bedJet: BedJet) {
-        let message = hasSeveralBedJets ? "\(title(of: bedJet)): \(message)" : message
+        let message = attributed(message, to: bedJet)
         // Off screen, an alert would wait for the next time Lull is opened; the watch says it now instead.
         if errands[bedJet.id] != nil {
             errandReports[bedJet.id] = message
@@ -191,8 +198,14 @@ final class AppModel {
         errorMessage = message
     }
 
+    /// A message about one BedJet, saying which when there are several.
+    func attributed(_ message: String, to bedJet: BedJet) -> String {
+        hasSeveralBedJets ? "\(title(of: bedJet)): \(message)" : message
+    }
+
     func appMovedToBackground() {
         isOnScreen = false
+        publishShortcutSchedules()
         // An errand from the watch lets go of its BedJet itself, once it's done.
         for bedJet in bedJets where errands[bedJet.id] == nil { bedJet.pause() }
         discovery?.stop()
@@ -208,6 +221,16 @@ final class AppModel {
         isOnScreen = true
         for bedJet in bedJets { bedJet.resume(asking: bedJet.id == selectedID) }
         if lookers > 0 { discovery?.start() }
+        publishShortcutSchedules()
+    }
+
+    /// So Siri and the Shortcuts app know the schedules "Start … in Lull" can name. Not while loading: the model isn't yet
+    /// registered for the queries this sets off, so LullApp does it once it is. iOS can drop that one when Lull has just
+    /// been installed or updated, leaving Shortcuts without a tile for each schedule, so it goes again as Lull comes on
+    /// and leaves the screen.
+    private func publishShortcutSchedules() {
+        guard isLoaded, storage.publishesWidgets else { return }
+        LullShortcuts.updateAppShortcutParameters()
     }
 
     // MARK: Tonight and the Remote, from outside Lull
@@ -241,8 +264,11 @@ final class AppModel {
     /// what Lull hands the widgets, so this hands them what changed. Off screen Lull holds no BedJet, so it connects,
     /// waits to hear what the BedJet is doing, and lets go again once it's done.
     func runErrand(_ command: WatchCommand) async -> WatchReply {
-        let background = UIApplication.shared.beginBackgroundTask(withName: "Errand from the watch")
-        defer { UIApplication.shared.endBackgroundTask(background) }
+        let background = BackgroundTime("Errand from the watch") { [weak self] in
+            guard let self else { return }
+            for bedJet in self.bedJets where self.errands[bedJet.id] != nil { bedJet.pause() }
+        }
+        defer { background.end() }
         if case .refresh = command {
             await refresh()
             return .done
@@ -304,6 +330,31 @@ final class AppModel {
         }
         for bedJet in listening { endErrand(on: bedJet) }
         publishWidgets()
+    }
+
+    // MARK: Actions from Shortcuts
+
+    /// Runs an action from Shortcuts on a BedJet. Off screen it is held, like an errand from the watch, only for the
+    /// action and let go once it's done, unless Lull came on screen meanwhile and holds it as usual. Nobody may be
+    /// watching an automation, so it only reaches a BedJet that is free; `mayAsk`, for an action that went on in Lull,
+    /// asks another phone for it too.
+    func reaching<Result>(_ bedJet: BedJet, mayAsk: Bool, _ work: () async throws -> Result) async throws -> Result {
+        // Even an action started on screen may finish off it, since leaving the screen leaves its BedJet to it.
+        let background = BackgroundTime("Action from Shortcuts") { bedJet.pause() }
+        defer { background.end() }
+        beginErrand(on: bedJet)
+        defer {
+            // An action throws what goes wrong with it. Anything else said off screen meanwhile, such as the BedJet having
+            // turned off early, waits for Lull to be opened, as it would without the action, rather than going with the
+            // errand. On screen it was shown already.
+            if !isOnScreen, let said = errandReports[bedJet.id] { errorMessage = said }
+            endErrand(on: bedJet)
+        }
+        if !isOnScreen {
+            try await bedJet.waitUntilLetGo(within: reachPatience)
+            if mayAsk { bedJet.resume(asking: true) } else { try await bedJet.reachIfFree(within: reachPatience) }
+        }
+        return try await work()
     }
 
     func makeLink(for bedJet: BedJet) -> BedJetLink {
@@ -564,5 +615,29 @@ final class AppModel {
             }
         }
         liveActivities.show(wanted, useFahrenheit: useFahrenheit)
+    }
+}
+
+/// Keeps iOS from suspending Lull while it finishes work off screen. Should the time run out first, `onExpiry` lets go of
+/// what the work holds, so the work fails rather than leaving a BedJet held by a phone iOS is about to suspend.
+@MainActor
+final class BackgroundTime {
+    private var task = UIBackgroundTaskIdentifier.invalid
+
+    init(_ name: String, onExpiry: @escaping @MainActor () -> Void) {
+        // Held by the handler until the task ends, so it can always end it, even if the caller let go of it first.
+        task = UIApplication.shared.beginBackgroundTask(withName: name) {
+            // iOS calls this on the main thread.
+            MainActor.assumeIsolated {
+                onExpiry()
+                self.end()
+            }
+        }
+    }
+
+    func end() {
+        guard task != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(task)
+        task = .invalid
     }
 }

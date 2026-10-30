@@ -80,7 +80,12 @@ final class BedJet: Identifiable {
 
     /// Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check.
     private(set) var isSlowToFind = false
-    private(set) var isBusy = false
+    /// Commands under way. More than one can be, such as a Remote change while an action from Shortcuts runs.
+    private var commandsUnderWay = 0
+    var isBusy: Bool { commandsUnderWay > 0 }
+    /// Set as Lull lets go of a connected BedJet, until the link says it has. Over Bluetooth that takes a moment, and until
+    /// then the link still says it's ready, though nothing sent on it arrives.
+    @ObservationIgnored private var isLettingGo = false
     /// A schedule is being written to the BedJet, which takes several steps.
     /// Its Live Activity holds still while this is set, and moves on to the night as soon as it clears.
     private(set) var isSavingSchedule = false { didSet { app?.publishLiveActivities() } }
@@ -110,6 +115,8 @@ final class BedJet: Identifiable {
     private var turnedOffAt: Date?
     /// How long after Off a report saying the BedJet is still running is taken to have been sent before it.
     static var staleReportWindow: TimeInterval = 2
+    /// How long a BedJet installing an update is expected back from restarting. Tests wait less.
+    static var restartPatience: TimeInterval = 600
     private var acknowledgingUpdate = false
 
     var saved: SavedBedJet {
@@ -173,10 +180,11 @@ final class BedJet: Identifiable {
         if resuming { resume(asking: asking) }
     }
 
-    /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
-    /// Holding on to it would make coming back instant, but a phone that is off screen cannot be
-    /// relied on to hear another phone asking for the BedJet.
+    /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen, and as soon as
+    /// an errand or action that reached it from the background is done. Holding on to it would make coming back
+    /// instant, but a phone that is off screen cannot be relied on to hear another phone asking for the BedJet.
     func pause() {
+        if linkState == .ready { isLettingGo = true }
         link?.stop()
         // A change still settling would otherwise wait until Lull is opened again.
         if settling != nil { commitObserved() }
@@ -184,11 +192,7 @@ final class BedJet: Identifiable {
     }
 
     func resume(asking: Bool) {
-        if !asking, let ble = link as? BLELink {
-            ble.listen()
-        } else {
-            link?.start()
-        }
+        if asking { link?.start() } else { link?.listen() }
         restartSearchTimer()
     }
 
@@ -237,6 +241,7 @@ final class BedJet: Identifiable {
 
     private func linkStateChanged(_ state: LinkState) {
         linkState = state
+        if state != .ready { isLettingGo = false }
         timeSearch()
         guard state == .ready, let link else { return }
         connectedAt = Date()
@@ -317,40 +322,46 @@ final class BedJet: Identifiable {
     // MARK: Tonight
 
     func startTonight() async {
-        guard let schedule = tonight, let link else { return }
+        guard let schedule = tonight, link != nil else { return }
         isSavingSchedule = true
         defer { isSavingSchedule = false }
-        await perform {
-            // Demos that show a night in progress pretend it started earlier.
-            let elapsed = link is DemoLink ? AppModel.demoElapsedMinutes : 0
-            let startedAt = Date().addingTimeInterval(TimeInterval(-elapsed * 60))
-            // Known for certain once connected, which `perform` waited for; checked before anything is written.
-            if let problem = self.problem(running: schedule, at: startedAt) { throw BedJetError.invalidProgram(problem) }
-            // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
-            // the last step, so it keeps to it by its own clock.
-            let tonight = schedule.resolved(startingAt: Format.minuteOfDay(startedAt))
-            // A V2 holds just the one sequence, which Lull always replaces.
-            let slot: Int
-            if link.generation == .v2 {
-                slot = 0
-            } else {
-                if self.deviceSlots.isEmpty { try await self.refreshSlots() }
-                guard let free = self.slot ?? self.deviceSlots.firstIndex(of: nil) else {
-                    self.needsSlotChoice = true
-                    return
-                }
-                slot = free
-                self.slot = slot
+        await perform { try await self.startSchedule(schedule, choosingSlot: true) }
+    }
+
+    /// Saves a schedule into Lull's slot on the BedJet and starts it. When every slot is taken, the person picks
+    /// one to reuse; without anyone there to pick, as in an automation, that is an error instead.
+    private func startSchedule(_ schedule: Schedule, choosingSlot: Bool) async throws {
+        let link = try connectedLink()
+        // Demos that show a night in progress pretend it started earlier.
+        let elapsed = link is DemoLink ? AppModel.demoElapsedMinutes : 0
+        let startedAt = Date().addingTimeInterval(TimeInterval(-elapsed * 60))
+        // Known for certain once connected, which `carryOut` waited for; checked before anything is written.
+        if let problem = problem(running: schedule, at: startedAt) { throw BedJetError.invalidProgram(problem) }
+        // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
+        // the last step, so it keeps to it by its own clock.
+        let tonight = schedule.resolved(startingAt: Format.minuteOfDay(startedAt))
+        // A V2 holds just the one sequence, which Lull always replaces.
+        let slot: Int
+        if link.generation == .v2 {
+            slot = 0
+        } else {
+            if deviceSlots.isEmpty { try await refreshSlots() }
+            guard let free = self.slot ?? deviceSlots.firstIndex(of: nil) else {
+                guard choosingSlot else { throw AutomationError.slotsFull }
+                needsSlotChoice = true
+                return
             }
-            try await link.store(tonight.program, slot: slot)
-            try await link.startProgram(slot: slot)
-            try await self.confirmStarted()
-            self.run = ActiveRun(schedule: tonight, startedAt: startedAt)
-            self.remoteTimer = .longest
-            self.record(.scheduleStarted(name: schedule.name, phases: tonight.phases))
-            if elapsed > 0, let demo = link as? DemoLink { demo.skipAhead(minutes: elapsed) }
-            try? await self.refreshSlots()
+            slot = free
+            self.slot = slot
         }
+        try await link.store(tonight.program, slot: slot)
+        try await link.startProgram(slot: slot)
+        try await confirmStarted()
+        run = ActiveRun(schedule: tonight, startedAt: startedAt)
+        remoteTimer = .longest
+        record(.scheduleStarted(name: schedule.name, phases: tonight.phases))
+        if elapsed > 0, let demo = link as? DemoLink { demo.skipAhead(minutes: elapsed) }
+        try? await refreshSlots()
     }
 
     /// A BedJet that can't run a schedule stays off and raises a notification instead of starting it.
@@ -378,62 +389,76 @@ final class BedJet: Identifiable {
     }
 
     func endNight() async {
-        guard let link else { return }
+        guard link != nil else { return }
+        await perform { try await self.stopNight() }
+    }
+
+    private func stopNight() async throws {
+        let link = try connectedLink()
         let name = run?.schedule.name
-        await perform {
-            try await link.setMode(.standby)
-            self.run = nil
-            self.record(.scheduleEnded(name: name, ending: .byYou))
-        }
+        try await link.setMode(.standby)
+        run = nil
+        record(.scheduleEnded(name: name, ending: .byYou))
     }
 
     // MARK: Remote
 
     func setMode(_ mode: Mode) async {
-        guard let link else { return }
-        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
-        let endingSchedule = run?.schedule.name
+        guard link != nil else { return }
         // Shown as a time, the end on screen holds across modes: a time picked here, or the BedJet's own countdown, as
         // after Lull relaunches and no longer knows a time was picked.
         if app?.remoteTimerShowsTime == true, mode != .standby, !remoteTimer.isAhead, run == nil, runningElsewhereStep == nil,
            let status, status.isRunning, status.remainingSeconds > 60 {
             remoteTimer = .until(Date().addingTimeInterval(TimeInterval(status.remainingSeconds)))
         }
-        await perform {
-            try await link.setMode(mode)
-            // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
-            // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
-            if mode == .standby { self.status?.mode = .standby }
-            self.turnedOffAt = mode == .standby ? Date() : nil
-            self.run = nil
-            if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
-            // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
-            // mode starts at its longest run, as the timer always has.
-            if mode == .standby || !self.remoteTimer.isAhead || self.app?.remoteTimerShowsTime != true { self.remoteTimer = .longest }
-            try await self.extendRuntime(entering: mode)
-        }
+        await perform { try await self.changeMode(to: mode) }
     }
 
     func setTemperature(_ halfCelsius: Int) async {
-        guard let link else { return }
-        await perform {
-            try await link.setTemperature(halfCelsius)
-            try await self.extendRuntime()
-        }
+        guard link != nil else { return }
+        await perform { try await self.changeTemperature(to: halfCelsius) }
     }
 
     func setFan(percent: Int) async {
-        guard let link else { return }
-        await perform {
-            try await link.setFan(step: percent / 5 - 1)
-            try await self.extendRuntime()
-        }
+        guard link != nil else { return }
+        await perform { try await self.changeFan(to: percent) }
     }
 
     func setRuntime(minutes: Int) async {
-        guard let link else { return }
+        guard link != nil else { return }
+        await perform { try await self.changeRuntime(to: minutes) }
+    }
+
+    private func changeMode(to mode: Mode) async throws {
+        let link = try connectedLink()
+        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
+        let endingSchedule = run?.schedule.name
+        try await link.setMode(mode)
+        // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
+        // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
+        if mode == .standby { status?.mode = .standby }
+        turnedOffAt = mode == .standby ? Date() : nil
+        run = nil
+        if let endingSchedule { record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
+        // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
+        // mode starts at its longest run, as the timer always has.
+        if mode == .standby || !remoteTimer.isAhead || app?.remoteTimerShowsTime != true { remoteTimer = .longest }
+        try await extendRuntime(entering: mode)
+    }
+
+    private func changeTemperature(to halfCelsius: Int) async throws {
+        try await connectedLink().setTemperature(halfCelsius)
+        try await extendRuntime()
+    }
+
+    private func changeFan(to percent: Int) async throws {
+        try await connectedLink().setFan(step: percent / 5 - 1)
+        try await extendRuntime()
+    }
+
+    private func changeRuntime(to minutes: Int) async throws {
         remoteTimer = .picked
-        await perform { try await link.setRuntime(minutes: minutes) }
+        try await connectedLink().setRuntime(minutes: minutes)
     }
 
     /// Turns the air off at `end`, or as near it as the mode allows. Lull keeps aiming at it as the temperature and fan
@@ -454,8 +479,8 @@ final class BedJet: Identifiable {
     /// Air started from the Remote runs for as long as the BedJet allows, or until the time picked there, until a
     /// duration is picked instead. Schedules keep their own timing.
     private func extendRuntime(entering mode: Mode? = nil) async throws {
-        // A schedule started from another phone times its own phases; leave its timer alone.
-        guard remoteTimer != .picked, run == nil, runningElsewhereStep == nil, let link else { return }
+        // A schedule started from another phone times its own phases; leave its timer alone. Off has no timer.
+        guard remoteTimer != .picked, run == nil, runningElsewhereStep == nil, mode != .standby, let link else { return }
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
         // the mode changes, so wait for it to report the new state before reading the limit.
         try await Task.sleep(nanoseconds: 600_000_000)
@@ -474,29 +499,40 @@ final class BedJet: Identifiable {
     }
 
     func setLED(_ on: Bool) async {
-        guard let link else { return }
-        await perform { try await link.setLED(on) }
+        guard link != nil else { return }
+        await perform { try await self.connectedLink().setLED(on) }
     }
 
     func setMuted(_ muted: Bool) async {
-        guard let link else { return }
-        await perform { try await link.setMuted(muted) }
+        guard link != nil else { return }
+        await perform { try await self.connectedLink().setMuted(muted) }
     }
 
+    /// Does what a control asked for, showing anything that goes wrong.
     private func perform(_ work: () async throws -> Void) async {
-        isBusy = true
-        defer {
-            isBusy = false
-            lastCommandAt = Date()
-        }
         do {
-            try await takeControl()
-            try await work()
+            try await carryOut(work)
         } catch is CancellationError {
             // A newer slider move replaced this one; nothing went wrong.
         } catch {
             app?.report(error.localizedDescription, from: self)
         }
+    }
+
+    /// Takes control of the BedJet and does the work, one thing at a time. What goes wrong is thrown to the caller.
+    private func carryOut<Result>(_ work: () async throws -> Result) async throws -> Result {
+        commandsUnderWay += 1
+        defer {
+            commandsUnderWay -= 1
+            lastCommandAt = Date()
+        }
+        try await takeControl()
+        return try await work()
+    }
+
+    private func connectedLink() throws -> BedJetLink {
+        guard let link else { throw BedJetError.notConnected }
+        return link
     }
 
     /// Using a control while another phone has the BedJet asks that phone to hand it over first.
@@ -510,6 +546,151 @@ final class BedJet: Identifiable {
             if link.state == .ready { return }
         }
         throw wasElsewhere ? BedJetError.inUseElsewhere : BedJetError.notConnected
+    }
+
+    // MARK: Automation
+
+    /// Restarting into new firmware, going by the clock too: until `restartPatience` after the BedJet was asked to check,
+    /// which installs it. The timer that stops expecting the BedJet back only runs while Lull does, so an action that
+    /// wakes Lull long after would otherwise find it restarting.
+    var isInstallingUpdate: Bool {
+        guard isRestarting, let startedAt = wifiActivity?.startedAt else { return false }
+        return Date().timeIntervalSince(startedAt) < Self.restartPatience
+    }
+
+    /// Reaches the BedJet for an action while Lull is off screen, but only if it is free: an iPhone can't ask another
+    /// phone for it from the background, and an automation nobody is watching shouldn't take it from a partner
+    /// anyway. Gives up before the link would scan for the unit, which finds nothing in the background.
+    /// Waits, for up to `patience`, until a BedJet Lull just let go of has dropped the connection. Shortcuts runs an
+    /// action straight after the one before, which let go of the BedJet as it finished; reaching for it before the
+    /// connection drops would find the link still ready, and what's sent on it would be lost.
+    func waitUntilLetGo(within patience: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(patience)
+        while isLettingGo, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+    }
+
+    func reachIfFree(within patience: TimeInterval) async throws {
+        resume(asking: false)
+        let deadline = Date().addingTimeInterval(patience)
+        while Date() < deadline {
+            switch linkState {
+            case .ready: return
+            case .yielded, .bluetoothOff, .unauthorized: throw AutomationError.needsLull
+            case .searching, .connecting: try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        throw AutomationError.needsLull
+    }
+
+    /// Starts a schedule for an action. A night already under way, from this phone or another, is left running. With every
+    /// slot taken, an action that went on in Lull asks which to reuse (`choosingSlot`), as Start Night there does.
+    func start(_ schedule: Schedule, choosingSlot: Bool = false) async throws -> Started {
+        isSavingSchedule = true
+        defer { isSavingSchedule = false }
+        return try await carryOutAction {
+            if let run = self.run { return .alreadyRunning(run.schedule.name) }
+            if self.runningElsewhereStep != nil { return .alreadyRunning(nil) }
+            try await self.startSchedule(schedule, choosingSlot: choosingSlot)
+            // Not started yet: Lull is asking which slot to reuse.
+            return self.run == nil ? .choosingSlot : .now
+        }
+    }
+
+    /// Sets the air as the Remote would. With a mode it turns the air on in that mode, ending a schedule that is
+    /// running; without one it changes the air that is already on. Everything is checked before anything is sent.
+    func apply(_ air: AirSettings, fahrenheit: Bool) async throws -> AppliedAir {
+        try await carryOutAction {
+            let mode = air.mode ?? self.status?.mode ?? .standby
+            if let problem = air.mode.flatMap(self.problem(using:)) { throw AutomationError.unsupportedMode(problem) }
+            if air.mode == nil {
+                guard mode != .standby else { throw AutomationError.airOff }
+                if air.degrees != nil, let refusal = Automation.temperatureRefusal(mode: mode, generation: self.generation) { throw refusal }
+                // The Remote hides its timer while a schedule runs, since the schedule times its own phases.
+                if air.minutes != nil, self.run != nil || self.runningElsewhereStep != nil { throw AutomationError.scheduleSetsTiming }
+            }
+            var applied = AppliedAir(mode: mode)
+            if let wanted = air.mode {
+                // Without a run time, Turn On runs as long as the BedJet allows, not until a time once picked on the Remote.
+                if air.minutes == nil { self.remoteTimer = .longest }
+                try await self.changeMode(to: wanted)
+            }
+            if let degrees = air.degrees, self.adjustsTemperature(mode) {
+                let halfCelsius = Automation.halfCelsius(degrees: degrees, fahrenheit: fahrenheit, mode: mode, status: self.status)
+                try await self.changeTemperature(to: halfCelsius)
+                applied.temperature = halfCelsius
+            }
+            if let fan = air.fanPercent {
+                let percent = Automation.fanPercent(fan)
+                try await self.changeFan(to: percent)
+                applied.fanPercent = percent
+            }
+            if let minutes = air.minutes {
+                let runTime = Automation.runTimeMinutes(minutes, mode: mode, status: self.status)
+                try await self.changeRuntime(to: runTime)
+                applied.minutes = runTime
+            }
+            return applied
+        }
+    }
+
+    /// Ends the night if a schedule is running, otherwise turns the air off.
+    func turnOff() async throws -> TurnedOff {
+        try await carryOutAction {
+            if let run = self.run {
+                try await self.stopNight()
+                return .endedNight(run.schedule.name)
+            }
+            if self.runningElsewhereStep != nil {
+                try await self.stopNight()
+                return .endedNight(nil)
+            }
+            guard self.status?.isRunning == true else { return .alreadyOff }
+            try await self.changeMode(to: .standby)
+            return .stoppedAir
+        }
+    }
+
+    func turnLightRing(on: Bool) async throws {
+        // A V2 sets the light and the beeps together, so it needs to know the other one first, which the status says.
+        try await carryOutAction { try await self.connectedLink().setLED(on) }
+    }
+
+    func muteBeeps(_ muted: Bool) async throws {
+        try await carryOutAction { try await self.connectedLink().setMuted(muted) }
+    }
+
+    /// Does an action's work once the BedJet has said what it is doing now. Its commands would go in among the Wi-Fi
+    /// setup's or the update's, so it is refused while those run. That is checked once it holds the BedJet, since one may
+    /// have started while it was reaching it, and none starts after. Once the BedJet is installing and away, the action
+    /// finds it unreachable as usual, and an update that finished while Lull was closed doesn't hold it up.
+    private func carryOutAction<Result>(_ work: () async throws -> Result) async throws -> Result {
+        try await carryOut {
+            if self.wifiActivity?.isRunning == true { throw AutomationError.updating }
+            try await self.awaitStatus()
+            return try await work()
+        }
+    }
+
+    /// Waits for the BedJet's first full report since it connected, which says what it is doing now rather than what Lull
+    /// last saw before it let go.
+    private func awaitStatus() async throws {
+        for _ in 0..<30 {
+            if hasReported(since: connectedAt) { return }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw BedJetError.timeout
+    }
+
+    /// What the BedJet is doing as far as Lull knows: live while connected, otherwise as it was last seen.
+    var reading: AirReading? {
+        if isConnected, let status, let step = status.extra?.programStep {
+            return AirReading(mode: status.mode, temperature: status.targetTemperature, fanPercent: status.fanPercent,
+                              programStep: step, remainingSeconds: status.remainingSeconds, at: Date())
+        }
+        return lastSeen.map {
+            AirReading(mode: $0.mode, temperature: $0.temperature, fanPercent: $0.fanPercent,
+                       programStep: $0.programStep, remainingSeconds: $0.remainingSeconds, at: $0.at)
+        }
     }
 
     // MARK: Wi-Fi and firmware
@@ -559,6 +740,9 @@ final class BedJet: Identifiable {
     private func useWiFi(_ purpose: WiFiActivity.Purpose, _ work: (BedJetLink, (Int) -> Void) async throws -> String) async {
         guard let link, wifiActivity?.isRunning != true else { return }
         wifiActivity = WiFiActivity(purpose: purpose, step: purpose == .updating ? "Asking your BedJet to check…" : "Asking your BedJet…")
+        // A command already on its way, such as one from a Shortcuts action, finishes first so the two don't interleave.
+        // Actions that come after are refused while this runs.
+        while isBusy { try? await Task.sleep(nanoseconds: 200_000_000) }
         do {
             let outcome = try await work(link) { phase in
                 if let step = Self.step(phase) { self.wifiActivity?.step = step }
@@ -577,7 +761,7 @@ final class BedJet: Identifiable {
     private func stopExpectingRestartLater() {
         guard let startedAt = wifiActivity?.startedAt else { return }
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(600))
+            try? await Task.sleep(for: .seconds(Self.restartPatience))
             guard let self, wifiActivity?.startedAt == startedAt, wifiActivity?.awaitsRestart == true else { return }
             wifiActivity?.restartOverdue = true
         }
@@ -754,6 +938,12 @@ final class BedJet: Identifiable {
         var modes: [Mode] = []
         for phase in schedule.phases where !generation.supports(phase.mode) && !modes.contains(phase.mode) { modes.append(phase.mode) }
         return modes
+    }
+
+    /// Why this BedJet can't use a mode, if it can't.
+    func problem(using mode: Mode) -> String? {
+        guard !generation.supports(mode) else { return nil }
+        return "\(displayName) is a BedJet V2, which can't run \(mode.title)."
     }
 
     /// Why a schedule can't run on this BedJet when started at `date`, if it can't.

@@ -101,6 +101,11 @@ The release lane signs all four targets and gives them the app's version, so onl
 needs raising. The watch app has no listing of its own: App Store Connect shows it under the iPhone app,
 and its screenshots go under the Apple Watch tab of the version.
 
+The app also uses **Access Wi-Fi Information**, to offer a BedJet 3 the network the iPhone is on. Its
+distribution profile only includes that once the capability is on for `com.rohankanjani.lull`: building
+to a connected iPhone with automatic signing turns it on, or tick it under the identifier's
+Capabilities in Certificates, Identifiers & Profiles.
+
 ### 5. Turn it on
 
 ```bash

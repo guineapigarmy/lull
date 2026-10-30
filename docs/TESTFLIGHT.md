@@ -38,6 +38,8 @@ In [Certificates, Identifiers & Profiles → Identifiers](https://developer.appl
    **App Groups** capability ticked. Then open it, click **Configure** next to App Groups, choose the group from
    step 1, and save.
 3. Do the same for the widgets: `com.guineapigarmy.lull.widgets`, also with that App Group.
+4. Open `com.guineapigarmy.lull` again and tick **Access Wi-Fi Information** too. The app uses it to offer a
+   BedJet 3 the network the iPhone is on, and its profile can't be made without it.
 
 When the watch app lands on `main`, add two more the same way: `com.guineapigarmy.lull.watchkitapp` and
 `com.guineapigarmy.lull.watchkitapp.widgets`, each with the App Group. The lane signs every target the Fastfile

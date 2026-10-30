@@ -21,6 +21,8 @@ public final class DemoLink: BedJetLink {
     private var clockSetAt = Date()
     /// The Wi-Fi network the unit was given, which it needs to check for firmware.
     public private(set) var wifiNetwork: String?
+    /// Newer firmware waits for the next check, which installs it, as tests want.
+    public var hasUpdate = false
     public var lastStatus: DeviceStatus? { state == .ready ? reported : nil }
     /// The step of the program running on the unit, connected or not; 0 when none is.
     public var programStep: Int { status.extra?.programStep ?? 0 }
@@ -142,7 +144,12 @@ public final class DemoLink: BedJetLink {
             enter(.standby, minutes: 0)
             restarting = 2
             state = .connecting
-            wifiSteps = [wifiNetwork == nil ? Codec.WiFiPhase.noNetwork : Codec.WiFiPhase.upToDate]
+            let installs = wifiNetwork != nil && hasUpdate
+            wifiSteps = wifiNetwork == nil ? [Codec.WiFiPhase.noNetwork]
+                : installs ? [Codec.WiFiPhase.checking, Codec.WiFiPhase.updating, Codec.WiFiPhase.installing]
+                : [Codec.WiFiPhase.upToDate]
+            // Installed, so the next check finds it up to date.
+            if installs { hasUpdate = false }
         case 0x80...0x82:
             let slot = Int(button - 0x80)
             guard let program = slots[slot] else { return }

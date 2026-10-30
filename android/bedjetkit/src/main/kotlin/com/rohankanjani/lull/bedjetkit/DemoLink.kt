@@ -38,6 +38,8 @@ class DemoLink(
     /** The Wi-Fi network the unit was given, which it needs to check for firmware. */
     var wifiNetwork: String? = wifiNetwork
         private set
+    /** Newer firmware waits for the next check, which installs it, as tests want. */
+    var hasUpdate = false
     override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) reported else null
     /** The step of the program running on the unit, connected or not; 0 when none is. */
     val programStep: Int get() = status.extra?.programStep ?: 0
@@ -167,7 +169,16 @@ class DemoLink(
                 enter(Mode.STANDBY, 0)
                 restarting = 2
                 state = LinkState.CONNECTING
-                wifiSteps = ArrayDeque(listOf(if (wifiNetwork == null) Codec.WiFiPhase.NO_NETWORK else Codec.WiFiPhase.UP_TO_DATE))
+                val installs = wifiNetwork != null && hasUpdate
+                wifiSteps = ArrayDeque(
+                    when {
+                        wifiNetwork == null -> listOf(Codec.WiFiPhase.NO_NETWORK)
+                        installs -> listOf(Codec.WiFiPhase.CHECKING, Codec.WiFiPhase.UPDATING, Codec.WiFiPhase.INSTALLING)
+                        else -> listOf(Codec.WiFiPhase.UP_TO_DATE)
+                    },
+                )
+                // Installed, so the next check finds it up to date.
+                if (installs) hasUpdate = false
             }
             in 0x80..0x82 -> {
                 val slot = button - 0x80

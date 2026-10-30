@@ -126,6 +126,22 @@ class WidgetUiTest {
     }
 
     @Test
+    fun startNightFromLullAndFromAnAutomationAppGoTheirOwnWays() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        // Lull's own Start Night, from the tile, the app shortcut and the widgets, starts tonight's schedule.
+        assertEquals(AppCommands.Command.StartNight(), AppCommands.from(AppCommands.startNightIntent(context)))
+        assertEquals(AppCommands.Command.StartNight("right"), AppCommands.from(AppCommands.startNightIntent(context, "right")))
+        // An automation app's names a BedJet, and maybe a schedule, by the names Lull shows.
+        val named = Intent(AutomationCall.START_NIGHT).putExtra("schedule", "Winter").putExtra("bedjet", "My side")
+        assertEquals(
+            AppCommands.Command.Automate(AutomationCall(AutomationCall.START_NIGHT, bedJet = "My side", schedule = "Winter")),
+            AppCommands.from(named),
+        )
+        val turnOn = Intent(AutomationCall.TURN_ON).putExtra("mode", "cool")
+        assertEquals(AppCommands.Command.Automate(AutomationCall(AutomationCall.TURN_ON, mode = "cool")), AppCommands.from(turnOn))
+    }
+
+    @Test
     fun quickRemoteButtonsCarryTheirPreset() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         for (preset in RemotePreset.defaults + RemotePreset(Mode.DRY, 45, 60, 60)) {

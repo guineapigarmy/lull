@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.view.View
 import com.rohankanjani.lull.AppCommands
+import com.rohankanjani.lull.runAutomation
 import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.BedJet
@@ -115,6 +116,10 @@ fun RootScreen(model: AppModel) {
                         val shown = model.bedJet
                         if (shown != null) model.scope.launch { model.startNight(shown) }
                     }
+                }
+                is AppCommands.Command.Automate -> {
+                    command.call.tab?.let { selectedTab = it.ordinal }
+                    model.scope.launch { runAutomation(model, command.call, onScreen = true) }
                 }
             }
         }

@@ -52,6 +52,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | BedJet sheet, BedJets nearby, choosing a BedJet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
+| Wi-Fi networks to offer a BedJet 3 | `Lull/WiFiNetworks.swift` (the iPhone's own) | `android/app/.../WiFiNetworks.kt` (those nearby) |
 | What widgets are handed, and what each BedJet is doing | `Shared/WidgetSnapshot.swift`, `Shared/LiveStatus.swift` | `android/shared/.../WidgetSnapshot.kt`, `LiveStatus.kt` |
 | Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/shared/.../Commands.kt` (tabs and presets), `android/app/.../AppCommands.kt` |
 | Tonight widget | `LullWidgets/TonightWidget.swift`, `Shared/NightProvider.swift`, `Shared/TonightAccessory.swift` (Lock Screen) | `android/app/.../widgets/TonightWidget.kt` |
@@ -185,6 +186,9 @@ Platform conventions, not behaviour:
 - On the iPhone, Tonight in StandBy and Both Sides light the night's curve up continuously, while Android's moves on each
   redraw, every few minutes. Android's countdowns are classic Chronometers, since Glance has no timer, and can read
   a second past zero before the widget is redrawn at the end.
+- An iPhone can't list the Wi-Fi networks around it, so the Wi-Fi screen offers only the network the iPhone is on,
+  where Android lists the 2.4 GHz networks nearby (`WiFiNetworksTest` is Android only). Both need location access,
+  asked for on that screen, and both offer Other Network for any name.
 - iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each
   widget at each size with Glance's test runner, since launchers differ too much to drive.
 - The watch apps follow their platforms: the Apple Watch's settings turn with the Digital Crown, Wear OS's with

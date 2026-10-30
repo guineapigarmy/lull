@@ -17,6 +17,8 @@ object AppCommands {
         data class StartNight(val bedJet: String? = null) : Command
         /** A Quick Remote button: sets a BedJet to a preset, or the one on screen when none is named. */
         data class Remote(val preset: RemotePreset, val bedJet: String? = null) : Command
+        /** An automation sent to Lull's screen, to finish what couldn't be done in the background. */
+        data class Automate(val call: AutomationCall) : Command
     }
 
     /** What a widget, tile or shortcut asks for by starting the app. */
@@ -44,9 +46,13 @@ object AppCommands {
     /** The command an intent that opened the app carries, if any. */
     fun from(intent: Intent?): Command? = when {
         intent == null -> null
-        intent.action == ACTION_START_NIGHT -> Command.StartNight(intent.getStringExtra(EXTRA_BEDJET))
+        // Lull's own widgets, tiles and shortcuts start tonight's schedule, and name a BedJet by its link; an automation
+        // app names it, and maybe a schedule, by the names Lull shows.
+        intent.action == ACTION_START_NIGHT && (intent.data != null || AutomationCall.OPTIONS.none(intent::hasExtra)) ->
+            Command.StartNight(intent.getStringExtra(EXTRA_BEDJET))
         intent.action == ACTION_REMOTE_PRESET -> remotePreset(intent)?.let { Command.Remote(it, intent.getStringExtra(EXTRA_BEDJET)) }
-        else -> LullTab.from(intent.dataString)?.let { Command.Show(it, LullTab.bedJet(intent.dataString)) }
+        else -> AutomationCall.from(intent)?.let(Command::Automate)
+            ?: LullTab.from(intent.dataString)?.let { Command.Show(it, LullTab.bedJet(intent.dataString)) }
     }
 
     /**

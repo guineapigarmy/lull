@@ -1,6 +1,6 @@
 # Lull privacy policy
 
-_Last updated: October 27, 2026_
+_Last updated: October 29, 2026_
 
 Lull is a Bluetooth remote and scheduler for the BedJet 3 and BedJet V2, made by Rohan Kanjani. It is available for
 iPhone and Android, with watch apps for Apple Watch and Wear OS.
@@ -17,13 +17,14 @@ requests.
 - **Which BedJets you use**: Lull remembers each BedJet you pick, by its Bluetooth identifier and name,
   with any nickname you give it, so it connects only to those and reconnects quickly. Seeing which
   BedJets are nearby happens on the phone; nothing about them leaves it.
+- **Your BedJet's Wi-Fi network**: Lull remembers the name of the Wi-Fi network you last gave each
+  BedJet 3, to show it, because a BedJet can't be asked. It never keeps the Wi-Fi password.
 
 ## Bluetooth
 
 Lull uses Bluetooth only to talk to your BedJet and to let two phones with Lull hand the BedJet to each
 other. To do that, a phone briefly broadcasts a short code derived from your BedJet's name. On Android,
-Lull declares that it does not use Bluetooth to find your location, and it never asks for location
-access.
+Lull declares that it does not use Bluetooth to find your location.
 
 ## Your watch
 
@@ -33,6 +34,20 @@ names, tonight's schedule, what each BedJet is doing and the last two days of hi
 your phone and your watch, over Watch Connectivity on Apple devices and the Wearable Data Layer's messages on
 Android, and is kept on the watch for its app, tile and complications. To do an errand while it's closed, Lull may
 briefly connect to your BedJet in the background, and lets go as soon as it's done.
+
+## Wi-Fi and firmware updates
+
+A BedJet 3 downloads firmware updates itself, from BedJet's servers, over your Wi-Fi. If you set up
+Wi-Fi for it in Lull, the network name and password you enter are sent to the BedJet over Bluetooth, and
+go nowhere else. Lull remembers the network's name on your phone, never the password. When you check for
+an update, Lull asks the BedJet to contact BedJet's servers; Lull itself still makes no network requests.
+
+## Location
+
+Only on the Wi-Fi screen, and only to offer you a network: Android lets an app list the Wi-Fi networks
+nearby, and both Android and iPhone let an app see which network the phone is on, only if it has location
+access. Lull asks for it there, uses it for nothing else, and never records or shares your location. You
+can say no and type the network's name instead.
 
 ## Children
 
